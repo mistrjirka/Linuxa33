@@ -1,0 +1,17 @@
+pkgname=postmarketos-mkinitfs-hook-a33x-usbpd
+pkgver=1
+pkgrel=0
+pkgdesc="Explicit S2MU106 USB-PD loader for Samsung Galaxy A33 recovery bring-up"
+url="https://github.com/mistrjirka/Linuxa33"
+arch="noarch"
+license="MIT"
+depends="postmarketos-mkinitfs"
+options="!check"
+source="02-a33x-usbpd-load.sh"
+
+package() {
+	install -Dm755 "$srcdir/02-a33x-usbpd-load.sh" \
+		"$pkgdir/usr/share/mkinitfs/hooks/02-a33x-usbpd-load.sh"
+}
+
+sha512sums=""
