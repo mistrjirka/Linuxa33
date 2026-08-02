@@ -65,7 +65,7 @@ This is a real compatibility defect and must be fixed for a proper port. It is *
 
 ## Most likely trigger
 
-The current device package places all 315 entries from TWRP's `modules.load.recovery` into `modules-initfs`. postmarketOS then exposes all of them to normal initramfs `udev` modalias loading. The log shows several module probes running concurrently.
+The failed device package placed all 315 entries from TWRP's `modules.load.recovery` into `modules-initfs`. postmarketOS then exposed all of them to normal initramfs `udev` modalias loading. The log shows several module probes running concurrently.
 
 TWRP boots the same kernel and module binaries successfully, so the leading hypothesis is a module-loading/order/concurrency difference rather than a fundamentally invalid kernel, DTB, or module binary.
 
@@ -83,22 +83,33 @@ In the matching Gabriel2392 kernel source, `exynos_mipi_phy_probe()`:
 
 The panic is at the very end of this probe (`+0x4e0` of a `0x4e8` function). Exact source-to-instruction mapping still requires the matching unstripped module or a rebuilt module with symbols. A null/missing resource reaching the default lane-address calculation is one plausible explanation, but it is not yet proven.
 
+## Repository mitigation implemented
+
+The repository now prevents accidental recreation of the failed image:
+
+- `scripts/generate-modules-initfs.py` defaults to a dependency-closed safe profile;
+- the complete TWRP load list requires an explicit unsafe override;
+- MIPI/display/camera modules are hard-blocked;
+- more than 128 initramfs modules are rejected by default;
+- `scripts/verify-initramfs-safety.py` scans the completed initramfs;
+- the recovery builder runs that scanner and fails closed;
+- the device package installs a modprobe rule blocking `phy_exynos_mipi`;
+- `docs/SAFE_NEXT_BOOT.md` contains the exact next-workstation procedure.
+
+These controls prevent the exact known panic path from being packaged again. They do not guarantee that the smaller image boots.
+
 ## Correct next experiment
 
 Do **not** rebuild or reflash the same 315-module image.
 
-Build a new recovery debug initramfs that does one of the following:
+Build a new recovery debug initramfs containing only the dependency closure for:
 
-### Preferred first test: minimal module closure
-
-Include only the modules required for:
-
-- SoC basics needed by their dependencies;
+- SoC basics needed by UFS/USB dependencies;
 - UFS/block access;
 - the Exynos USB DRD PHY/controller;
 - configfs USB NCM/debug-shell.
 
-Explicitly exclude all display, MIPI, camera, media and panel modules, especially:
+Explicitly exclude all display, MIPI, camera and media modules, especially:
 
 ```text
 phy-exynos-mipi.ko
@@ -110,11 +121,7 @@ is-cis-*.ko
 camerapp.ko
 ```
 
-Generate the minimal set from `modules.dep` as a dependency closure rather than guessing every dependency manually.
-
-### Alternative controlled test
-
-Disable modalias-driven module autoloading in the initramfs and load a selected module list sequentially. This is useful because TWRP likely uses a controlled module sequence rather than unrestricted parallel `udevd` probing.
+Use `scripts/prepare-safe-module-packages.sh`; do not manually copy `modules.load.recovery`.
 
 ## Staged follow-up
 
