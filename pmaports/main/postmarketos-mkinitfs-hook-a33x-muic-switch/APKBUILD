@@ -13,6 +13,7 @@ source="
 	03-a33x-muic-switch.sh
 	03-a33x-muic-switch.files
 "
+builddir="$srcdir"
 
 build() {
 	${CC:-gcc} \
