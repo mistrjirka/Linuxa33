@@ -35,6 +35,12 @@ s2mpu14_regulator
 # Internal UFS storage.
 ufs-exynos-core
 
+# Samsung's bootloader leaves the cluster-0 watchdog running. The kernel has
+# CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y and CONFIG_WATCHDOG_OPEN_TIMEOUT=0,
+# but the hardware driver is modular. Include it so the standard kernel
+# watchdog handover can be tested before adding a userspace feeder.
+s3c2410_wdt
+
 # USB DRD gadget path used by the postmarketOS debug shell.
 phy-exynos-usbdrd-super
 usb_notify_layer
