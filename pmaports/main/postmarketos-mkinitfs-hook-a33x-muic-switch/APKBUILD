@@ -19,6 +19,7 @@ build() {
 	${CC:-gcc} \
 		-Os \
 		-static \
+		-no-pie \
 		-fno-ident \
 		-fstack-protector-strong \
 		-Wall \
