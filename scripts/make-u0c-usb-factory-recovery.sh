@@ -64,7 +64,11 @@ if [[ -z "$module_name" ]]; then
 fi
 
 if ! modinfo -p "$pdic_module" | grep -q '^f_usb_mode:'; then
-    echo "REFUSING U0c: $module_name does not expose f_usb_mode" >&2
+    echo "REFUSING U0c: the exact prebuilt $module_name lacks f_usb_mode" >&2
+    echo "The nearby public source is not configuration-identical to this binary." >&2
+    echo "No replacement parameter will be guessed." >&2
+    echo "Run: bash $REPO_ROOT/scripts/analyze-usb-factory-binary-path.sh" >&2
+    echo "Actual parameters:" >&2
     modinfo -p "$pdic_module" >&2 || true
     exit 1
 fi
