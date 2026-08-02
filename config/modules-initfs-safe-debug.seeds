@@ -1,0 +1,42 @@
+# Safe first-boot profile for the Samsung A33 recovery debug initramfs.
+#
+# The generator follows modules.dep recursively, so dependencies do not need to
+# be duplicated here. Keep this list limited to SoC basics, UFS and USB gadget
+# support. Add hardware groups only after the debug shell is reachable.
+
+# Core Exynos platform pieces used by storage/USB dependencies.
+exynos-chipid_v2
+exynos-reboot
+exynos_mct
+clk_exynos
+i2c-exynos5
+pinctrl-samsung-core
+pinctrl-samsung-s2mpu13
+pinctrl-samsung-s2mpu14
+exynos-pmu-if
+exynos-pd
+cmupmucal
+exynos_acpm
+ect_parser
+exynos-pm
+exynos-dm
+exynos-cpuhp
+exynos-cpupm
+exynos_pm_qos
+exynos-s2mpu
+
+# PMIC support commonly required by the platform.
+acpm-mfd-bus
+s2mpu13_mfd
+s2mpu14_mfd
+s2mpu13_regulator
+s2mpu14_regulator
+
+# Internal UFS storage.
+ufs-exynos-core
+
+# USB DRD gadget path used by the postmarketOS debug shell.
+phy-exynos-usbdrd-super
+usb_notify_layer
+usb_notifier
+dwc3-exynos-usb
