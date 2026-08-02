@@ -21,6 +21,8 @@ fi
 SAFETY_CHECKER="$LINUXA33_REPO/scripts/verify-initramfs-safety.py"
 SAFETY_BLOCKLIST="$LINUXA33_REPO/config/modules-initfs-blocklist.glob"
 SAFETY_MAX_MODULES="${SAFETY_MAX_MODULES:-128}"
+ACTIVATION_CHECKER="$LINUXA33_REPO/scripts/verify-module-activation.py"
+ACTIVATION_CONTRACTS="$LINUXA33_REPO/config/module-activation-contracts.tsv"
 
 OUT="$ROOT/build/pmos-debug-recovery"
 LAYOUT="$OUT/twrp-layout"
@@ -47,7 +49,9 @@ for required_file in \
     "$MKBOOTIMG" \
     "$AVBTOOL" \
     "$SAFETY_CHECKER" \
-    "$SAFETY_BLOCKLIST"
+    "$SAFETY_BLOCKLIST" \
+    "$ACTIVATION_CHECKER" \
+    "$ACTIVATION_CONTRACTS"
 do
     if [[ ! -f "$required_file" ]]; then
         echo "Missing required file: $required_file" >&2
@@ -60,6 +64,13 @@ python3 "$SAFETY_CHECKER" \
     --initramfs "$PMOS_INITRAMFS" \
     --blocklist "$SAFETY_BLOCKLIST" \
     --max-modules "$SAFETY_MAX_MODULES"
+
+echo
+echo "=== Fail-closed module activation check ==="
+python3 "$ACTIVATION_CHECKER" \
+    --contracts "$ACTIVATION_CONTRACTS" \
+    --repo-root "$LINUXA33_REPO" \
+    --initramfs "$PMOS_INITRAMFS"
 
 rm -rf "$OUT"
 mkdir -p "$LAYOUT" "$CHECK" "$KEYDIR"
@@ -248,6 +259,7 @@ cmp "$CHECK/dtb" "$LAYOUT/dtb"
 echo
 echo "=== FINAL VALIDATION ==="
 echo "Initramfs safety gate:  passed"
+echo "Module activation gate: passed"
 echo "TWRP header/layout:      verified"
 echo "TWRP kernel:             unchanged"
 echo "TWRP DTB:                unchanged"
