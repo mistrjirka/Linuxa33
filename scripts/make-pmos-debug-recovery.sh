@@ -10,6 +10,18 @@ UNPACK="$ROOT/aosp-mkbootimg/unpack_bootimg.py"
 MKBOOTIMG="$ROOT/aosp-mkbootimg/mkbootimg.py"
 AVBTOOL="$ROOT/aosp-avb/avbtool.py"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ -f "$SCRIPT_REPO/config/modules-initfs-blocklist.glob" ]]; then
+    LINUXA33_REPO="${LINUXA33_REPO:-$SCRIPT_REPO}"
+else
+    LINUXA33_REPO="${LINUXA33_REPO:-$HOME/Linuxa33}"
+fi
+
+SAFETY_CHECKER="$LINUXA33_REPO/scripts/verify-initramfs-safety.py"
+SAFETY_BLOCKLIST="$LINUXA33_REPO/config/modules-initfs-blocklist.glob"
+SAFETY_MAX_MODULES="${SAFETY_MAX_MODULES:-128}"
+
 OUT="$ROOT/build/pmos-debug-recovery"
 LAYOUT="$OUT/twrp-layout"
 CHECK="$OUT/final-unpacked"
@@ -33,7 +45,9 @@ for required_file in \
     "$PMOS_INITRAMFS" \
     "$UNPACK" \
     "$MKBOOTIMG" \
-    "$AVBTOOL"
+    "$AVBTOOL" \
+    "$SAFETY_CHECKER" \
+    "$SAFETY_BLOCKLIST"
 do
     if [[ ! -f "$required_file" ]]; then
         echo "Missing required file: $required_file" >&2
@@ -41,10 +55,17 @@ do
     fi
 done
 
+echo "=== Fail-closed initramfs safety check ==="
+python3 "$SAFETY_CHECKER" \
+    --initramfs "$PMOS_INITRAMFS" \
+    --blocklist "$SAFETY_BLOCKLIST" \
+    --max-modules "$SAFETY_MAX_MODULES"
+
 rm -rf "$OUT"
 mkdir -p "$LAYOUT" "$CHECK" "$KEYDIR"
 chmod 700 "$KEYDIR"
 
+echo
 echo "=== Extract exact TWRP layout and arguments ==="
 
 python3 "$UNPACK" \
@@ -226,6 +247,7 @@ cmp "$CHECK/dtb" "$LAYOUT/dtb"
 
 echo
 echo "=== FINAL VALIDATION ==="
+echo "Initramfs safety gate:  passed"
 echo "TWRP header/layout:      verified"
 echo "TWRP kernel:             unchanged"
 echo "TWRP DTB:                unchanged"
