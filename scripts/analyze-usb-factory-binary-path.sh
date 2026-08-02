@@ -58,15 +58,17 @@ TYPEC="$(find_one usb_typec_manager)"
         grep -Ei 'factory|f_usb_mode|f_mode|pdic_param_factory_mode' || true
 } | tee "$OUT/summary.txt"
 
+FULL_DISASSEMBLY="$OUT/pdic.full-disassembly.txt"
+"$OBJDUMP" -dr "$PDIC" > "$FULL_DISASSEMBLY" 2>&1
+
 for symbol in check_factory_mode_boot is_factory_mode_pdic_param get_usb_factory_mode; do
     {
         echo "=== $symbol ==="
-        "$OBJDUMP" -dr "$PDIC" 2>&1 |
-            awk -v symbol="$symbol" '
-                $0 ~ "<" symbol ">:" { show=1 }
-                show { print }
-                show && /^$/ { exit }
-            '
+        awk -v symbol="$symbol" '
+            $0 ~ "<" symbol ">:" { show=1 }
+            show { print }
+            show && /^$/ { exit }
+        ' "$FULL_DISASSEMBLY"
     } > "$OUT/$symbol.disassembly.txt"
 done
 
