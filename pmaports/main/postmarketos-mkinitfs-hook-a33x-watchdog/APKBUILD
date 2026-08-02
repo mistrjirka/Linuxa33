@@ -1,5 +1,5 @@
 pkgname=postmarketos-mkinitfs-hook-a33x-watchdog
-pkgver=1
+pkgver=2
 pkgrel=0
 pkgdesc="Early watchdog feeder for Samsung Galaxy A33 recovery bring-up"
 url="https://github.com/mistrjirka/Linuxa33"
