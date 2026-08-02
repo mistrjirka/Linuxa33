@@ -88,13 +88,13 @@ DPKG="$PMAPORTS/device/downstream/device-samsung-a33x"
 wc -l "$DPKG/modules-initfs"
 cat ~/a33-port/build/modules-initfs-safe.report.txt
 
-grep -Ei \
+if grep -Ei \
   'phy[-_]exynos[-_]mipi|exynos[-_]drm|mcd[-_]panel|fimc[-_]is' \
-  "$DPKG/modules-initfs" &&
-  {
-    echo "Unsafe module found; stop"
-    exit 1
-  }
+  "$DPKG/modules-initfs"
+then
+  echo "Unsafe module found; stop"
+  exit 1
+fi
 ```
 
 Do not increase the 128-module guard merely to make the build pass. Review
@@ -145,13 +145,13 @@ Expected properties:
 Also confirm the panic module is absent manually:
 
 ```bash
-gzip -dc ~/a33-port/export-debug/initramfs |
+if gzip -dc ~/a33-port/export-debug/initramfs |
   cpio -it 2>/dev/null |
-  grep -Ei 'phy[-_]exynos[-_]mipi|exynos[-_]drm|mcd[-_]panel|fimc[-_]is' &&
-  {
-    echo "Unsafe module embedded; stop"
-    exit 1
-  }
+  grep -Ei 'phy[-_]exynos[-_]mipi|exynos[-_]drm|mcd[-_]panel|fimc[-_]is'
+then
+  echo "Unsafe module embedded; stop"
+  exit 1
+fi
 ```
 
 ## 5. Build the guarded recovery image
