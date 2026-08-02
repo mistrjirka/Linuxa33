@@ -6,6 +6,8 @@ KREL="${KREL:-5.10.66-Gabriel260BR-TWRP-ga0103aac9499}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ACTIVATION_CHECKER="$REPO_ROOT/scripts/verify-module-activation.py"
+ACTIVATION_CONTRACTS="$REPO_ROOT/config/module-activation-contracts.tsv"
 
 if ! command -v pmbootstrap >/dev/null 2>&1; then
     echo "pmbootstrap is not available in PATH" >&2
@@ -30,7 +32,9 @@ for required in \
     "$MODULE_SOURCE/modules.load.recovery" \
     "$KPKG/APKBUILD" \
     "$DPKG/APKBUILD" \
-    "$REPO_ROOT/scripts/generate-modules-initfs.py"
+    "$REPO_ROOT/scripts/generate-modules-initfs.py" \
+    "$ACTIVATION_CHECKER" \
+    "$ACTIVATION_CONTRACTS"
 do
     if [[ ! -f "$required" ]]; then
         echo "Missing required file: $required" >&2
@@ -58,6 +62,14 @@ python3 "$REPO_ROOT/scripts/generate-modules-initfs.py" \
     --module-root "$MODULE_ROOT" \
     --output "$DPKG/modules-initfs" \
     --report "$PORT_ROOT/build/modules-initfs-safe.report.txt"
+
+echo
+echo "=== Verify module activation contracts ==="
+python3 "$ACTIVATION_CHECKER" \
+    --contracts "$ACTIVATION_CONTRACTS" \
+    --repo-root "$REPO_ROOT" \
+    --selected-modules "$DPKG/modules-initfs" \
+    --module-root "$MODULE_ROOT"
 
 echo
 echo "=== Package complete module tree for the root filesystem ==="
