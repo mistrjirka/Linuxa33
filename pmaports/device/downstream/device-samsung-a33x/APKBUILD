@@ -1,9 +1,11 @@
 # Experimental local package for Samsung Galaxy A33 5G.
-# Run `pmbootstrap checksum device-samsung-a33x` after generating modules-initfs.
+# Generate modules-initfs only with scripts/generate-modules-initfs.py in its
+# default guarded mode. Do not copy all of TWRP's modules.load.recovery: that
+# configuration caused a repeatable panic in phy_exynos_mipi.
 
 pkgname=device-samsung-a33x
 pkgdesc="Samsung Galaxy A33 5G"
-pkgver=2
+pkgver=3
 pkgrel=0
 url="https://postmarketos.org"
 license="MIT"
@@ -20,6 +22,7 @@ source="
 	deviceinfo
 	kernel-cmdline.conf
 	modules-initfs
+	90-samsung-a33x-unsafe-modules.conf
 "
 
 build() {
@@ -28,6 +31,9 @@ build() {
 
 package() {
 	devicepkg_package "$startdir" "$pkgname"
+
+	install -Dm644 "$srcdir/90-samsung-a33x-unsafe-modules.conf" \
+		"$pkgdir/etc/modprobe.d/90-samsung-a33x-unsafe-modules.conf"
 }
 
 sha512sums=""
