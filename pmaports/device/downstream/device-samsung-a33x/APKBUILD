@@ -1,0 +1,33 @@
+# Experimental local package for Samsung Galaxy A33 5G.
+# Run `pmbootstrap checksum device-samsung-a33x` after generating modules-initfs.
+
+pkgname=device-samsung-a33x
+pkgdesc="Samsung Galaxy A33 5G"
+pkgver=2
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+
+depends="
+	linux-samsung-a33x
+	postmarketos-base
+"
+makedepends="devicepkg-dev"
+
+source="
+	deviceinfo
+	kernel-cmdline.conf
+	modules-initfs
+"
+
+build() {
+	devicepkg_build "$startdir" "$pkgname"
+}
+
+package() {
+	devicepkg_package "$startdir" "$pkgname"
+}
+
+sha512sums=""
