@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="${ROOT:-$HOME/a33-port}"
+EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
 
 TWRP="$ROOT/reference/twrp/recovery.img"
 PMOS_INITRAMFS="$ROOT/export-debug/initramfs"
@@ -24,7 +25,7 @@ SAFETY_MAX_MODULES="${SAFETY_MAX_MODULES:-128}"
 ACTIVATION_CHECKER="$LINUXA33_REPO/scripts/verify-module-activation.py"
 ACTIVATION_CONTRACTS="$LINUXA33_REPO/config/module-activation-contracts.tsv"
 
-OUT="$ROOT/build/pmos-debug-recovery"
+OUT="${OUT:-$ROOT/build/pmos-debug-recovery}"
 LAYOUT="$OUT/twrp-layout"
 CHECK="$OUT/final-unpacked"
 ARGS0="$OUT/mkbootimg.args0"
@@ -85,20 +86,48 @@ python3 "$UNPACK" \
     --format=mkbootimg \
     -0 > "$ARGS0"
 
-mapfile -d '' -t MKBOOTIMG_ARGS < "$ARGS0"
+mapfile -d '' -t TWRP_MKBOOTIMG_ARGS < "$ARGS0"
 
-if (( ${#MKBOOTIMG_ARGS[@]} == 0 )); then
+if (( ${#TWRP_MKBOOTIMG_ARGS[@]} == 0 )); then
     echo "No mkbootimg arguments were extracted" >&2
     exit 1
 fi
 
-echo "Extracted ${#MKBOOTIMG_ARGS[@]} mkbootimg arguments"
+PAYLOAD_MKBOOTIMG_ARGS=("${TWRP_MKBOOTIMG_ARGS[@]}")
+
+if [[ -n "$EXTRA_KERNEL_CMDLINE" ]]; then
+    cmdline_found=0
+    for ((index = 0; index < ${#PAYLOAD_MKBOOTIMG_ARGS[@]}; index++)); do
+        if [[ "${PAYLOAD_MKBOOTIMG_ARGS[$index]}" == "--cmdline" ]]; then
+            if (( index + 1 >= ${#PAYLOAD_MKBOOTIMG_ARGS[@]} )); then
+                echo "Malformed mkbootimg arguments: --cmdline has no value" >&2
+                exit 1
+            fi
+            PAYLOAD_MKBOOTIMG_ARGS[$((index + 1))]="$(
+                printf '%s %s' \
+                    "${PAYLOAD_MKBOOTIMG_ARGS[$((index + 1))]}" \
+                    "$EXTRA_KERNEL_CMDLINE"
+            )"
+            cmdline_found=1
+            break
+        fi
+    done
+
+    if (( ! cmdline_found )); then
+        echo "Cannot append kernel parameter: no --cmdline argument was extracted" >&2
+        exit 1
+    fi
+
+    echo "Opt-in extra kernel command line: $EXTRA_KERNEL_CMDLINE"
+fi
+
+echo "Extracted ${#TWRP_MKBOOTIMG_ARGS[@]} mkbootimg arguments"
 
 echo
 echo "=== Verify TWRP reconstruction ==="
 
 python3 "$MKBOOTIMG" \
-    "${MKBOOTIMG_ARGS[@]}" \
+    "${TWRP_MKBOOTIMG_ARGS[@]}" \
     --output "$ROUNDTRIP"
 
 ORIGINAL_SIZE="$(
@@ -168,11 +197,12 @@ echo
 echo "=== Build postmarketOS recovery payload ==="
 
 # Replace only the ramdisk. Keep the proven TWRP kernel, DTB,
-# recovery-DTBO, header values, addresses and command line.
+# recovery-DTBO, header values and addresses. The command line remains exact
+# unless EXTRA_KERNEL_CMDLINE was deliberately supplied for an isolated test.
 cp -L "$PMOS_INITRAMFS" "$LAYOUT/ramdisk"
 
 python3 "$MKBOOTIMG" \
-    "${MKBOOTIMG_ARGS[@]}" \
+    "${PAYLOAD_MKBOOTIMG_ARGS[@]}" \
     --output "$RAW"
 
 if (( TRAILER_SIZE > 0 )); then
@@ -256,6 +286,13 @@ cmp "$CHECK/ramdisk" "$PMOS_INITRAMFS"
 cmp "$CHECK/recovery_dtbo" "$LAYOUT/recovery_dtbo"
 cmp "$CHECK/dtb" "$LAYOUT/dtb"
 
+if [[ -n "$EXTRA_KERNEL_CMDLINE" ]]; then
+    if ! grep -F -- "$EXTRA_KERNEL_CMDLINE" "$OUT/final-boot-info.txt" >/dev/null; then
+        echo "Final recovery is missing requested kernel command-line addition" >&2
+        exit 1
+    fi
+fi
+
 echo
 echo "=== FINAL VALIDATION ==="
 echo "Initramfs safety gate:  passed"
@@ -266,6 +303,11 @@ echo "TWRP DTB:                unchanged"
 echo "TWRP recovery-DTBO:      unchanged"
 echo "Samsung trailer:         preserved ($TRAILER_SIZE bytes)"
 echo "postmarketOS initramfs:  verified"
+if [[ -n "$EXTRA_KERNEL_CMDLINE" ]]; then
+    echo "Kernel cmdline addition: verified ($EXTRA_KERNEL_CMDLINE)"
+else
+    echo "Kernel command line:     unchanged"
+fi
 echo "AVB footer:              verified"
 echo "Final partition size:    $FINAL_SIZE bytes"
 
