@@ -1,0 +1,41 @@
+pkgname=postmarketos-mkinitfs-hook-a33x-muic-switch
+pkgver=1
+pkgrel=0
+pkgdesc="Recovery-only S2MU106 USB data switch helper for Samsung Galaxy A33"
+url="https://github.com/mistrjirka/Linuxa33"
+arch="aarch64"
+license="MIT"
+depends="postmarketos-mkinitfs"
+makedepends="linux-headers"
+options="!check"
+source="
+	a33x-muic-switch.c
+	03-a33x-muic-switch.sh
+	03-a33x-muic-switch.files
+"
+
+build() {
+	${CC:-gcc} \
+		-Os \
+		-static \
+		-fno-ident \
+		-fstack-protector-strong \
+		-Wall \
+		-Wextra \
+		-Werror \
+		-Wformat=2 \
+		-Wl,--build-id=none \
+		-o a33x-muic-switch \
+		a33x-muic-switch.c
+}
+
+package() {
+	install -Dm755 "$builddir/a33x-muic-switch" \
+		"$pkgdir/usr/libexec/a33x-muic-switch"
+	install -Dm755 "$srcdir/03-a33x-muic-switch.sh" \
+		"$pkgdir/usr/share/mkinitfs/hooks/03-a33x-muic-switch.sh"
+	install -Dm644 "$srcdir/03-a33x-muic-switch.files" \
+		"$pkgdir/usr/share/mkinitfs/files/03-a33x-muic-switch.files"
+}
+
+sha512sums=""
