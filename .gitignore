@@ -1,0 +1,45 @@
+# Samsung proprietary firmware and large extracted images
+firmware/
+*.tar.md5
+*.lz4
+*.img
+*.bin
+*.cpio
+*.cpio.gz
+*.cpio.lz4
+
+# Generated postmarketOS exports and build products
+export/
+export-debug/
+build/pmos-debug-recovery/
+build/recovery-before-*.img
+build/*-root.img
+build/*-boot.img
+
+# Private signing material
+build/keys/
+*.pem
+*.key
+*.p12
+
+# Extracted proprietary recovery/kernel material
+reference/twrp/recovery.img
+unpacked/
+
+# Local tool checkouts and caches
+aosp-mkbootimg/
+aosp-avb/
+pmbootstrap/
+.pmb/
+.cache/
+
+# Logs may contain serial numbers and other identifiers
+logs/raw/
+*.log
+
+# Editors / Python
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+.idea/
