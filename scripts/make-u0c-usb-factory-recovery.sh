@@ -121,7 +121,7 @@ PY
 
 (
     cd "$extract_dir"
-    if ! cpio -i --quiet "$pdic_entry" < "$cpio_archive" 2> "$extract_errors"; then
+    if ! cpio -i --make-directories --quiet "$pdic_entry" < "$cpio_archive" 2> "$extract_errors"; then
         echo "REFUSING U0c: failed to extract $pdic_entry" >&2
         cat "$extract_errors" >&2 || true
         exit 1
