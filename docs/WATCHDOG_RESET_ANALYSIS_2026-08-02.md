@@ -40,9 +40,42 @@ Watchdog or Warm Reset Detected.
 
 There is no `Kernel panic`, fatal exception, or BRK trace in this test boot.
 
-TWRP stays alive because its userspace starts `watchdogd`, which periodically
-pets the Exynos cluster watchdog. The postmarketOS debug initramfs did not start
-an equivalent early watchdog handler.
+## Exact TWRP watchdog interface
+
+Live TWRP inspection established the known-working userspace behavior:
+
+```text
+/system/bin/watchdogd 10 20
+```
+
+The process keeps file descriptor 4 open on `/dev/watchdog`. Available nodes
+are:
+
+```text
+/dev/watchdog
+/dev/watchdog0 -> platform 10060000.watchdog_cl0
+/dev/watchdog1 -> virtual watchdog device
+```
+
+TWRP starts it from `init.recovery.s5e8825.rc` with the documented intent to
+feed every 10 seconds and maintain a 20 second margin. The Android binary is
+dynamically linked against `/system/bin/linker64`, so copying that binary alone
+into an Alpine/postmarketOS initramfs is not an appropriate solution.
+
+A dedicated noarch postmarketOS mkinitfs hook has therefore been added at:
+
+```text
+pmaports/main/postmarketos-mkinitfs-hook-a33x-watchdog/
+```
+
+Its early shell feeder opens `/dev/watchdog` once, keeps the file descriptor
+open, and writes every 8 seconds. This mirrors the proven TWRP interface without
+adding Android linker or Bionic dependencies. The hook logs startup and failure
+messages to `/dev/kmsg` and stores its PID in `/run/a33x-watchdog.pid`.
+
+The test recovery must be rejected before assembly unless
+`hooks/01-a33x-watchdog.sh` is present and passes
+`scripts/verify-initramfs-watchdog-hook.sh`.
 
 ## Separate USB observation
 
@@ -60,22 +93,23 @@ Do not weaken the MIPI/camera blocklist to address it.
 
 ## Next controlled experiment
 
-First test a debug-only kernel-command-line override that disables the Samsung
-watchdog-at-boot behavior while keeping the kernel, DTB, recovery-DTBO,
-initramfs module set, trailer, and AVB construction unchanged:
+Build a recovery with the early A33 watchdog hook and leave the existing kernel
+command line unchanged. This avoids combining two variables in one experiment.
+
+The success criteria are:
+
+1. `hooks/01-a33x-watchdog.sh` is present in the final initramfs.
+2. The image still passes the 63-module safety gate.
+3. The phone remains alive for more than 90 seconds.
+4. The next boot does not report `CL0_WDTRESET`.
+5. `last_kmsg` contains `a33x-watchdog: started early feeder` and periodic
+   hardware watchdog keepalive messages.
+
+Only if the feeder cannot open or ping `/dev/watchdog` should the debug-only
+kernel-command-line experiment be revisited:
 
 ```text
 s3c2410_wdt.tmr_atboot=0 sec_watchdog.sec_pet=0
 ```
-
-This is an experiment, not yet a proven permanent fix. The rebuilt image must
-show these arguments in its final unpacked boot information before flashing.
-The success criterion is surviving for more than 90 seconds without a
-`CL0_WDTRESET`.
-
-If the command-line override is ignored by this vendor kernel, add an early
-initramfs watchdog petter using the actual TWRP watchdog device and interface.
-Inspect TWRP's `/dev/watchdog*`, `/sys/class/watchdog`, `watchdogd` process, and
-recovery init scripts before implementing that fallback.
 
 After watchdog survival is proven, debug DWC3 role/runtime-PM separately.
