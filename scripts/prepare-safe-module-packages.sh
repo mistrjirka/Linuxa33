@@ -95,7 +95,11 @@ if [[ "$A33X_PDIC_FACTORY_PATCH" == "1" ]]; then
     before_vermagic="$(modinfo -F vermagic "$PDIC_MODULE")"
     before_depends="$(modinfo -F depends "$PDIC_MODULE")"
 
-    patched_module="$PDIC_MODULE.patched"
+    # Keep the temporary output ending in .ko. kmod's modinfo treats paths
+    # with other suffixes (for example .ko.patched) as module names instead
+    # of ELF module files and refuses them before metadata comparison.
+    patched_module="${PDIC_MODULE%.ko}.patched.ko"
+    rm -f "$patched_module"
     python3 "$PDIC_PATCHER" \
         --module "$PDIC_MODULE" \
         --output "$patched_module" \
