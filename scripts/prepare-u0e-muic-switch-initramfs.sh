@@ -253,12 +253,12 @@ for entry in \
     hooks/02-a33x-usbpd-load.sh \
     hooks/03-a33x-muic-switch.sh \
     usr/libexec/a33x-muic-switch
- do
+do
     if ! grep -qx "$entry" "$entries"; then
         echo "REFUSING U0e: required initramfs entry is missing: $entry" >&2
         exit 1
     fi
- done
+done
 
 find_entry() {
     local suffix="$1"
@@ -276,8 +276,8 @@ PY
 TYPEC_ENTRY="$(find_entry '/usb_typec_manager.ko')"
 PDIC_ENTRY="$(find_entry '/pdic_notifier_module.ko')"
 I2C_DEV_ENTRY="$(find_entry '/i2c-dev.ko')"
-HELPER_ENTRY="$(find_entry '/usr/libexec/a33x-muic-switch')"
-HOOK_ENTRY="$(find_entry '/hooks/03-a33x-muic-switch.sh')"
+HELPER_ENTRY="usr/libexec/a33x-muic-switch"
+HOOK_ENTRY="hooks/03-a33x-muic-switch.sh"
 
 (
     cd "$extract_dir"
