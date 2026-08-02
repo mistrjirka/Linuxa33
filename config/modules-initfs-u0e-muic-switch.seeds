@@ -1,0 +1,45 @@
+# U0e derives from the guarded U0d profile and adds only i2c_dev so the
+# recovery-only userspace helper can access the otherwise unowned S2MU106 MUIC
+# register bank at I2C bus 2, address 0x3e.
+
+# Core Exynos platform pieces used by storage/USB dependencies.
+exynos-chipid_v2
+exynos-reboot
+exynos_mct
+clk_exynos
+i2c-exynos5
+i2c-dev
+pinctrl-samsung-core
+pinctrl-samsung-s2mpu13
+pinctrl-samsung-s2mpu14
+exynos-pmu-if
+exynos-pd
+cmupmucal
+exynos_acpm
+ect_parser
+exynos-pm
+exynos-dm
+exynos-cpuhp
+exynos-cpupm
+exynos_pm_qos
+exynos-s2mpu
+
+# PMIC support commonly required by the platform. This intentionally does not
+# add mfd_s2mu106 or muic_s2mu106; address 2:0x3e must remain unowned.
+acpm-mfd-bus
+s2mpu13_mfd
+s2mpu14_mfd
+s2mpu13_regulator
+s2mpu14_regulator
+
+# Internal UFS storage.
+ufs-exynos-core
+
+# Bootloader watchdog handover.
+s3c2410_wdt
+
+# USB DRD gadget path.
+phy-exynos-usbdrd-super
+usb_notify_layer
+usb_notifier
+dwc3-exynos-usb
