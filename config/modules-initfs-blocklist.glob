@@ -1,0 +1,36 @@
+# Hard safety blocklist for early A33 recovery experiments.
+#
+# Patterns are matched against file names and normalized module names
+# (hyphens and underscores are treated equivalently).
+
+# Confirmed panic source from last_kmsg.
+phy-exynos-mipi*
+phy_exynos_mipi*
+
+# Display/panel stack, which can pull the confirmed MIPI PHY module.
+exynos-drm*
+exynos_drm*
+mcd-panel*
+mcd_panel*
+
+# Camera/media stack. Not needed for a console/USB debug boot.
+fimc-is*
+fimc_is*
+is-cis-*
+is_cis_*
+is-actuator-*
+is_actuator_*
+is-flash-*
+is_flash_*
+is-device-*
+is_device_*
+pablo-*
+pablo_*
+camerapp*
+gdc*
+votf*
+mcfrc*
+smfc*
+scaler*
+repeater*
+videobuf2*
