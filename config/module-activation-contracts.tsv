@@ -1,0 +1,9 @@
+# Fail-closed contracts for modules that must execute during initramfs bring-up.
+#
+# Fields are tab-separated:
+#   module  method  repository hook source  expected initramfs hook path
+#
+# A contract is enforced only when its module is selected or embedded. Vendor
+# modules with unsafe/unavailable soft dependencies must use explicit-insmod;
+# merely embedding their .ko file is not accepted as proof that they will run.
+s2mu106_usbpd	explicit-insmod	pmaports/main/postmarketos-mkinitfs-hook-a33x-usbpd/02-a33x-usbpd-load.sh	hooks/02-a33x-usbpd-load.sh
