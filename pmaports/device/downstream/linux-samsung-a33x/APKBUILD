@@ -1,0 +1,54 @@
+# Experimental prebuilt kernel package for the Samsung Galaxy A33 5G.
+# Proprietary/prebuilt payload files are intentionally not stored in Git.
+# Expected local source files:
+#   Image
+#   samsung-a33x.dtb
+#   recovery_dtbo
+#   modules.tar.gz  (modules/<kernel-release>/...)
+#   linux-samsung-a33x.trigger
+# Run `pmbootstrap checksum linux-samsung-a33x` after adding them.
+
+pkgname=linux-samsung-a33x
+pkgver=5.10.66
+pkgrel=7
+pkgdesc="Samsung Galaxy A33 5G prebuilt TWRP kernel"
+arch="aarch64"
+_flavor="samsung-a33x"
+_krel="5.10.66-Gabriel260BR-TWRP-ga0103aac9499"
+url="https://kernel.org"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps"
+depends="kmod"
+triggers="$pkgname.trigger=/usr/lib/modules/$_krel"
+
+source="
+	Image
+	samsung-a33x.dtb
+	recovery_dtbo
+	modules.tar.gz
+	$pkgname.trigger
+"
+
+package() {
+	mkdir -p \
+		"$pkgdir/boot/dtbs" \
+		"$pkgdir/usr/lib/modules/$_krel" \
+		"$pkgdir/usr/share/kernel/$_flavor"
+
+	install -Dm644 "$srcdir/Image" \
+		"$pkgdir/boot/vmlinuz"
+
+	install -Dm644 "$srcdir/samsung-a33x.dtb" \
+		"$pkgdir/boot/dtbs/samsung-a33x.dtb"
+
+	install -Dm644 "$srcdir/recovery_dtbo" \
+		"$pkgdir/boot/recovery_dtbo"
+
+	cp -a "$srcdir/modules/$_krel/." \
+		"$pkgdir/usr/lib/modules/$_krel/"
+
+	printf '%s\n' "$_krel" \
+		> "$pkgdir/usr/share/kernel/$_flavor/kernel.release"
+}
+
+sha512sums=""
