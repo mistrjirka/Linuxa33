@@ -109,10 +109,6 @@ find_module_path() {
     return 1
 }
 
-return_success() {
-    return 0 2>/dev/null || exit 0
-}
-
 mkdir -p /run /dev
 ensure_kmsg
 
@@ -127,15 +123,15 @@ log_a33x_muic "begin bus=2 address=0x3e expected-adapter=13860000.hsi2c"
 
 if [ ! -r "$modules_dep" ]; then
     log_a33x_muic "ERROR modules.dep-missing path=$modules_dep"
-    return_success
+    return 0 2>/dev/null || exit 0
 fi
 if ! command -v insmod >/dev/null 2>&1; then
     log_a33x_muic "ERROR insmod-command-missing"
-    return_success
+    return 0 2>/dev/null || exit 0
 fi
 if [ ! -x "$helper" ]; then
     log_a33x_muic "ERROR helper-missing path=$helper"
-    return_success
+    return 0 2>/dev/null || exit 0
 fi
 
 # A driver-created 2-003e client means another kernel owner controls the MUIC
@@ -144,18 +140,18 @@ if [ -e /sys/bus/i2c/devices/2-003e ]; then
     owner_name="$(cat /sys/bus/i2c/devices/2-003e/name 2>/dev/null || true)"
     owner_driver="$(readlink /sys/bus/i2c/devices/2-003e/driver 2>/dev/null || true)"
     log_a33x_muic "ERROR address-owned device=2-003e name=${owner_name:-unknown} driver=${owner_driver:-none}"
-    return_success
+    return 0 2>/dev/null || exit 0
 fi
 
 if ! module_is_loaded i2c_dev; then
     i2c_dev_path="$(find_module_path i2c_dev 2>/dev/null || true)"
     if [ -z "$i2c_dev_path" ]; then
         log_a33x_muic "ERROR i2c-dev-module-absent"
-        return_success
+        return 0 2>/dev/null || exit 0
     fi
     if ! load_module_path "$i2c_dev_path"; then
         log_a33x_muic "ERROR i2c-dev-activation-failed"
-        return_success
+        return 0 2>/dev/null || exit 0
     fi
 fi
 
@@ -168,7 +164,7 @@ done
 
 if [ ! -r /sys/class/i2c-dev/i2c-2/dev ]; then
     log_a33x_muic "ERROR i2c-char-device-sysfs-missing after=${attempt}x100ms"
-    return_success
+    return 0 2>/dev/null || exit 0
 fi
 
 adapter_target="$(readlink /sys/class/i2c-dev/i2c-2 2>/dev/null || true)"
@@ -178,7 +174,7 @@ case "$adapter_target" in
         ;;
     *)
         log_a33x_muic "ERROR unexpected-adapter target=${adapter_target:-unknown}"
-        return_success
+        return 0 2>/dev/null || exit 0
         ;;
 esac
 
@@ -189,12 +185,12 @@ if [ ! -c /dev/i2c-2 ]; then
     case "$major:$minor" in
         *[!0-9:]*|:|*:)
             log_a33x_muic "ERROR invalid-device-number value=${devnum:-empty}"
-            return_success
+            return 0 2>/dev/null || exit 0
             ;;
     esac
     if ! mknod /dev/i2c-2 c "$major" "$minor" 2>/dev/null; then
         log_a33x_muic "ERROR mknod-failed path=/dev/i2c-2 dev=$devnum"
-        return_success
+        return 0 2>/dev/null || exit 0
     fi
     chmod 0600 /dev/i2c-2 2>/dev/null || true
     log_a33x_muic "device-node-created path=/dev/i2c-2 dev=$devnum"
@@ -202,7 +198,7 @@ fi
 
 if [ -e /sys/bus/i2c/devices/2-003e ]; then
     log_a33x_muic "ERROR address-became-owned device=2-003e"
-    return_success
+    return 0 2>/dev/null || exit 0
 fi
 
 : > "$helper_output"
@@ -218,13 +214,13 @@ done < "$helper_output"
 
 if [ "$helper_rc" -ne 0 ]; then
     log_a33x_muic "ERROR helper-failed rc=$helper_rc"
-    return_success
+    return 0 2>/dev/null || exit 0
 fi
 
 if ! grep -q 'a33x-muic-switch-v1: success ctrl1=0x17 switch=0x24' "$helper_output"; then
     log_a33x_muic "ERROR success-marker-missing"
-    return_success
+    return 0 2>/dev/null || exit 0
 fi
 
 log_a33x_muic "success bus=2 address=0x3e ctrl1=0x17 switch=0x24"
-return_success
+return 0 2>/dev/null || exit 0
