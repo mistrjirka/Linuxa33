@@ -26,4 +26,21 @@ pmaports/device/downstream/device-samsung-a33x/90-samsung-a33x-unsafe-modules.co
 docs/SAFE_NEXT_BOOT.md
 ```
 
+## Required next-workstation entry point
+
+```bash
+cd ~/Linuxa33
+git pull --ff-only
+bash scripts/prepare-safe-module-packages.sh
+```
+
+After rebuilding and exporting the debug initramfs:
+
+```bash
+python3 scripts/verify-initramfs-safety.py \
+  --initramfs ~/a33-port/export-debug/initramfs
+```
+
+The recovery builder performs the same check again and refuses to continue if the safety checker or blocklist is missing.
+
 These changes prevent the exact known panic path from being packaged again. They do not yet correct the missing `CONFIG_DEVTMPFS` kernel options or guarantee that the next minimal image boots.
