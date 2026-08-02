@@ -85,9 +85,10 @@ load_module_path() {
 	if insmod "$full_path" 2>"$error_file"; then
 		log_a33x_usbpd "insmod-ok module=$module_name"
 		return 0
+	else
+		rc=$?
 	fi
 
-	rc=$?
 	if module_is_loaded "$module_name"; then
 		log_a33x_usbpd "insmod-raced module=$module_name rc=$rc"
 		return 0
