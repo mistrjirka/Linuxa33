@@ -1,0 +1,25 @@
+# https://postmarketos.org/deviceinfo
+# Experimental Samsung Galaxy A33 5G definition.
+
+deviceinfo_format_version="0"
+deviceinfo_name="Samsung Galaxy A33 5G"
+deviceinfo_manufacturer="Samsung"
+deviceinfo_codename="samsung-a33x"
+deviceinfo_year="2022"
+deviceinfo_arch="aarch64"
+deviceinfo_dtb="samsung-a33x"
+
+deviceinfo_chassis="handset"
+deviceinfo_external_storage="true"
+deviceinfo_drm="true"
+
+# Recovery images are assembled and flashed manually while porting.
+deviceinfo_flash_method="none"
+deviceinfo_generate_bootimg="false"
+deviceinfo_initfs_compression="gzip:default"
+deviceinfo_root_filesystem="ext4"
+
+deviceinfo_usb_idVendor="0x04e8"
+deviceinfo_usb_idProduct="0x6860"
+deviceinfo_usb_network_function="ncm.usb0"
+deviceinfo_usb_network_udc="13200000.dwc3"
