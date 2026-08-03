@@ -16,9 +16,9 @@ DETAILS="$PORT_ROOT/build/a33-command-capabilities-details.txt"
 KNOWN_TWRP_SHA256="414df197c21de25fc5627cd3a4d8a59011bef0141cfa479560c48aa378d3ad7e"
 
 HOST_REQUIRED=(
-    bash adb sha256sum stat awk grep find sort date mkdir tee readlink realpath
+    bash "$ADB" sha256sum stat awk grep find sort date mkdir tee readlink realpath
     tar ip ping timeout python3 ssh lsusb sudo mktemp cp rm cat seq sleep git
-    debugfs
+    debugfs sed tr
 )
 HOST_OPTIONAL=(journalctl shellcheck pv)
 TWRP_REQUIRED=(
@@ -74,9 +74,6 @@ for script in "${FUTURE_SCRIPTS[@]}"; do
     bash -n "$path"
 done
 
-# Statically enumerate actual ADB subcommand invocations in the future scripts.
-# Strings such as report keys named adb_exec_in_required are not commands and
-# are deliberately ignored by this parser.
 ADB_SCAN="$(
     python3 - "$SCRIPT_DIR" "${FUTURE_SCRIPTS[@]}" <<'PY'
 from pathlib import Path
@@ -117,12 +114,9 @@ PY
 )"
 printf '%s\n' "$ADB_SCAN" | tee -a "$DETAILS"
 
-ADB_VERSION="$($ADB version 2>&1)"
+ADB_VERSION="$("$ADB" version 2>&1)"
 printf '%s\n' "$ADB_VERSION" | sed 's/^/adb_version_output=/' | tee -a "$DETAILS"
 
-# `shell`, `push`, and `exec-out` are tested against this exact TWRP transport.
-# `reboot recovery` is intentionally not executed by the audit; it is the only
-# deferred subcommand and is used later by the boot observer.
 echo "=== Wait for exact known-good TWRP ===" | tee -a "$DETAILS"
 until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
     sleep 1
@@ -131,8 +125,6 @@ done
 REMOTE_CAPABILITY="$(
     "$ADB" shell sh -s -- "${TWRP_REQUIRED[@]}" 2>/dev/null <<'SH' | tr -d '\r'
 set -eu
-expected_recovery=414df197c21de25fc5627cd3a4d8a59011bef0141cfa479560c48aa378d3ad7e
-shift_count=0
 
 echo "recovery_sha=$(sha256sum /dev/block/by-name/recovery | awk 'NR==1 {print $1}')"
 for command in "$@"; do
@@ -173,7 +165,9 @@ dd if=/dev/zero of="$work/dd.bin" bs=4096 count=4 2>/dev/null
 sync
 [ "$(blockdev --getsize64 /dev/block/by-name/recovery)" = 100663296 ]
 [ "$(blockdev --getro /dev/block/by-name/userdata)" = 0 ]
-blkid "$metadata" > "$work/blkid.txt" 2>&1 || true
+metadata_type="$(blkid -s TYPE -o value "$metadata" 2>/dev/null || true)"
+[ -n "$metadata_type" ]
+echo "metadata_type=$metadata_type"
 
 resolved_metadata="$(readlink -f "$metadata" 2>/dev/null || true)"
 existing_mount="$(awk -v a="$metadata" -v b="$resolved_metadata" '$1==a || $1==b {print $2; exit}' /proc/mounts 2>/dev/null || true)"
@@ -191,10 +185,9 @@ uname -a > "$work/uname.txt"
 dmesg > "$work/dmesg.txt"
 getprop > "$work/getprop.txt"
 ls -la "$work" > "$work/ls.txt"
-printf 'a\rb\n' | tr -d '\r' | grep -qx b
+printf 'b\r\n' | tr -d '\r' | grep -qx b
 
 echo "twrp_functional_probe=passed"
-echo "recovery_expected=$expected_recovery"
 SH
 )"
 printf '%s\n' "$REMOTE_CAPABILITY" | tee -a "$DETAILS"
@@ -210,7 +203,6 @@ if [[ "$RECOVERY_SHA" != "$KNOWN_TWRP_SHA256" || \
     exit 1
 fi
 
-# Prove binary-safe ADB push and exec-out on a small deterministic payload.
 LOCAL_PROBE="$(mktemp)"
 REMOTE_PROBE=/tmp/a33-adb-capability-probe.bin
 cleanup_host() {
@@ -227,7 +219,7 @@ PY
 LOCAL_SHA="$(sha256sum "$LOCAL_PROBE" | awk '{print $1}')"
 LOCAL_SIZE="$(stat -Lc '%s' "$LOCAL_PROBE")"
 "$ADB" push "$LOCAL_PROBE" "$REMOTE_PROBE" >/dev/null
-REMOTE_META="$($ADB shell "stat -c '%s' '$REMOTE_PROBE'; sha256sum '$REMOTE_PROBE'" | tr -d '\r')"
+REMOTE_META="$("$ADB" shell "stat -c '%s' '$REMOTE_PROBE'; sha256sum '$REMOTE_PROBE'" | tr -d '\r')"
 REMOTE_SIZE="$(printf '%s\n' "$REMOTE_META" | sed -n '1p')"
 REMOTE_SHA="$(printf '%s\n' "$REMOTE_META" | awk 'NR==2 {print $1}')"
 EXEC_OUT_SHA="$(
@@ -241,7 +233,6 @@ fi
 cleanup_host
 trap - EXIT
 
-# Validate the commands required after first boot are present inside the image.
 ROOT_IMAGE="$(readlink -f "$ROOT_IMAGE_LINK" 2>/dev/null || true)"
 [[ -f "$ROOT_IMAGE" ]] || {
     echo "REFUSING: current rootfs deployment image is missing" >&2
