@@ -1,0 +1,43 @@
+pkgname=postmarketos-mkinitfs-hook-a33x-muic-switch-dynamic
+pkgver=1
+pkgrel=0
+pkgdesc="Recovery-only dynamic S2MU106 MUIC switch helper for Samsung Galaxy A33"
+url="https://github.com/mistrjirka/Linuxa33"
+arch="aarch64"
+license="MIT"
+depends="postmarketos-mkinitfs"
+makedepends="linux-headers"
+options="!check"
+source="
+	a33x-muic-switch-dynamic.c
+	03-a33x-muic-switch-dynamic.sh
+	03-a33x-muic-switch-dynamic.files
+"
+builddir="$srcdir"
+
+build() {
+	${CC:-gcc} \
+		-Os \
+		-static \
+		-no-pie \
+		-fno-ident \
+		-fstack-protector-strong \
+		-Wall \
+		-Wextra \
+		-Werror \
+		-Wformat=2 \
+		-Wl,--build-id=none \
+		-o a33x-muic-switch-dynamic \
+		a33x-muic-switch-dynamic.c
+}
+
+package() {
+	install -Dm755 "$builddir/a33x-muic-switch-dynamic" \
+		"$pkgdir/usr/libexec/a33x-muic-switch-dynamic"
+	install -Dm755 "$srcdir/03-a33x-muic-switch-dynamic.sh" \
+		"$pkgdir/usr/share/mkinitfs/hooks/03-a33x-muic-switch-dynamic.sh"
+	install -Dm644 "$srcdir/03-a33x-muic-switch-dynamic.files" \
+		"$pkgdir/usr/share/mkinitfs/files/03-a33x-muic-switch-dynamic.files"
+}
+
+sha512sums=""
