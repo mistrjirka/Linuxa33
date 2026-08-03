@@ -4,6 +4,7 @@ set -euo pipefail
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 KREL="${KREL:-5.10.66-Gabriel260BR-TWRP-ga0103aac9499}"
 A33X_PDIC_FACTORY_PATCH="${A33X_PDIC_FACTORY_PATCH:-0}"
+EXPECTED_SAFE_MODULE_COUNT="${EXPECTED_SAFE_MODULE_COUNT:-66}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -29,6 +30,10 @@ if [[ "$A33X_PDIC_FACTORY_PATCH" == "1" ]] && ! command -v nm >/dev/null 2>&1; t
 fi
 if [[ "$A33X_PDIC_FACTORY_PATCH" != "0" && "$A33X_PDIC_FACTORY_PATCH" != "1" ]]; then
     echo "A33X_PDIC_FACTORY_PATCH must be 0 or 1" >&2
+    exit 1
+fi
+if [[ ! "$EXPECTED_SAFE_MODULE_COUNT" =~ ^[0-9]+$ ]]; then
+    echo "EXPECTED_SAFE_MODULE_COUNT must be numeric" >&2
     exit 1
 fi
 
@@ -141,6 +146,22 @@ python3 "$REPO_ROOT/scripts/generate-modules-initfs.py" \
     --output "$DPKG/modules-initfs" \
     --report "$PORT_ROOT/build/modules-initfs-safe.report.txt"
 
+selected_count="$(grep -cve '^[[:space:]]*$' "$DPKG/modules-initfs")"
+if [[ "$selected_count" != "$EXPECTED_SAFE_MODULE_COUNT" ]]; then
+    echo "REFUSING: safe module set has unexpected size" >&2
+    echo "Expected: $EXPECTED_SAFE_MODULE_COUNT" >&2
+    echo "Actual:   $selected_count" >&2
+    echo "Review $PORT_ROOT/build/modules-initfs-safe.report.txt" >&2
+    exit 1
+fi
+if ! grep -qx 's2mu106_usbpd' "$DPKG/modules-initfs"; then
+    echo "REFUSING: required s2mu106_usbpd module is absent from modules-initfs" >&2
+    exit 1
+fi
+
+echo "Safe module count verified: $selected_count"
+echo "Required USB-PD module selected: s2mu106_usbpd"
+
 echo
 echo "=== Verify module activation contracts ==="
 python3 "$ACTIVATION_CHECKER" \
@@ -157,8 +178,7 @@ tar -C "$STAGE/usr/lib" \
 
 echo
 echo "=== Safety summary ==="
-printf 'modules-initfs entries: '
-wc -l < "$DPKG/modules-initfs"
+echo "modules-initfs entries: $selected_count"
 
 if grep -Ei 'phy[-_]exynos[-_]mipi|exynos[-_]drm|mcd[-_]panel|fimc[-_]is' \
     "$DPKG/modules-initfs"
