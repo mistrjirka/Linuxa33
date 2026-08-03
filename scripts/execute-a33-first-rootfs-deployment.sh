@@ -10,6 +10,7 @@ CONFIRMATION="${1:-}"
 REQUIRED_CONFIRMATION="ERASE-ANDROID-USERDATA-INSTALL-PMOS"
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUDIT_SCRIPT="$SCRIPT_DIR/audit-a33-first-rootfs-chain-final.sh"
 AUDIT_REPORT="${AUDIT_REPORT:-$PORT_ROOT/build/a33-first-rootfs-chain-final-audit.txt}"
 DEPLOY="$SCRIPT_DIR/deploy-a33-rootfs-to-userdata.sh"
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -32,10 +33,12 @@ for command in sha256sum awk readlink stat; do
     }
 done
 
-[[ -f "$AUDIT_REPORT" && -f "$DEPLOY" ]] || {
-    echo "REFUSING: final chain-audit report or deploy implementation is missing" >&2
-    exit 1
-}
+for required in "$AUDIT_SCRIPT" "$AUDIT_REPORT" "$DEPLOY"; do
+    [[ -f "$required" ]] || {
+        echo "REFUSING: required final-chain file is missing: $required" >&2
+        exit 1
+    }
+done
 
 value() {
     local key="$1"
@@ -74,6 +77,7 @@ check_script() {
     fi
 }
 
+check_script final_audit_script_sha256 "$AUDIT_SCRIPT"
 check_script execute_script_sha256 "$SELF"
 check_script deploy_script_sha256 "$SCRIPT_DIR/deploy-a33-rootfs-to-userdata.sh"
 check_script flash_script_sha256 "$SCRIPT_DIR/flash-a33-u0g-after-userdata-deploy.sh"
