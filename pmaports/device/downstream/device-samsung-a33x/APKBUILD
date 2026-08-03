@@ -6,7 +6,7 @@
 pkgname=device-samsung-a33x
 pkgdesc="Samsung Galaxy A33 5G"
 pkgver=3
-pkgrel=1
+pkgrel=2
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -22,7 +22,10 @@ options="!check !archcheck"
 #   13860000.hsi2c, followed by the verified S2MU106 MUIC 0x17/0x24 sequence;
 # - temporary metadata persistence for the next normal-rootfs handoff test;
 # - debug-shell payload retained as a rescue facility, inactive unless the
-#   pmos.debug-shell kernel parameter is explicitly supplied.
+#   pmos.debug-shell kernel parameter is explicitly supplied;
+# - OpenSSH plus NetworkManager/nmcli/Wi-Fi packages required for the first
+#   real-rootfs management path instead of relying on a previously modified
+#   host chroot.
 depends="
 	linux-samsung-a33x
 	postmarketos-base
@@ -31,6 +34,11 @@ depends="
 	postmarketos-mkinitfs-hook-a33x-usbpd
 	postmarketos-mkinitfs-hook-a33x-muic-switch-dynamic
 	postmarketos-mkinitfs-hook-a33x-muic-persist-dynamic
+	openssh
+	networkmanager
+	networkmanager-cli
+	networkmanager-wifi
+	wpa_supplicant
 "
 makedepends="devicepkg-dev"
 
@@ -50,6 +58,15 @@ package() {
 
 	install -Dm644 "$srcdir/90-samsung-a33x-unsafe-modules.conf" \
 		"$pkgdir/etc/modprobe.d/90-samsung-a33x-unsafe-modules.conf"
+
+	# The first normal-rootfs experiment must provide deterministic management
+	# access. Package the OpenRC runlevel links instead of depending on mutable
+	# state in an existing pmbootstrap rootfs.
+	install -d "$pkgdir/etc/runlevels/default"
+	ln -s /etc/init.d/sshd \
+		"$pkgdir/etc/runlevels/default/sshd"
+	ln -s /etc/init.d/networkmanager \
+		"$pkgdir/etc/runlevels/default/networkmanager"
 }
 
 sha512sums=""
