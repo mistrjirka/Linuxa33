@@ -11,7 +11,8 @@ RESULT_ROOT="${RESULT_ROOT:-$PORT_ROOT/build/runtime-results}"
 SSH_TARGET="${SSH_TARGET:-jirka@172.16.42.1}"
 OBSERVATION_DIR="${OBSERVATION_DIR:-}"
 DEPLOYMENT_REPORT="$PORT_ROOT/build/a33-userdata-rootfs-deployment.txt"
-EXPECTED_ROOT_RESOLVED="/dev/block/sda36"
+EXPECTED_ROOT_DEVNAME="${EXPECTED_ROOT_DEVNAME:-sda36}"
+EXPECTED_MARKER_RESOLVED="/dev/block/sda36"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="$RESULT_ROOT/a33-first-rootfs-live-$TIMESTAMP"
 ARCHIVE="$OUT.tar.gz"
@@ -70,12 +71,36 @@ section() {
 }
 
 root_source="$(findmnt -n -o SOURCE / 2>/dev/null || awk '$2=="/" {print $1; exit}' /proc/mounts)"
+root_fstype="$(findmnt -n -o FSTYPE / 2>/dev/null || true)"
+root_majmin="$(findmnt -n -o MAJ:MIN / 2>/dev/null || true)"
+root_sysfs=""
+root_devname=""
+if [ -n "$root_majmin" ] && [ -e "/sys/dev/block/$root_majmin" ]; then
+    root_sysfs="$(readlink -f "/sys/dev/block/$root_majmin" 2>/dev/null || true)"
+    root_devname="$(awk -F= '$1=="DEVNAME" {print $2; exit}' "/sys/dev/block/$root_majmin/uevent" 2>/dev/null || true)"
+fi
 root_resolved="$(readlink -f "$root_source" 2>/dev/null || true)"
 root_probe="$root_source"
-[ -b "$root_resolved" ] && root_probe="$root_resolved"
-root_type="$(blkid -s TYPE -o value "$root_probe" 2>/dev/null || true)"
-root_label="$(blkid -s LABEL -o value "$root_probe" 2>/dev/null || true)"
-root_uuid="$(blkid -s UUID -o value "$root_probe" 2>/dev/null || true)"
+if [ -n "$root_devname" ] && [ -b "/dev/$root_devname" ]; then
+    root_probe="/dev/$root_devname"
+elif [ -b "$root_resolved" ]; then
+    root_probe="$root_resolved"
+fi
+
+root_type="$root_fstype"
+root_label="$(findmnt -n -o LABEL / 2>/dev/null || true)"
+root_uuid="$(findmnt -n -o UUID / 2>/dev/null || true)"
+if command -v lsblk >/dev/null 2>&1; then
+    [ -n "$root_type" ] || root_type="$(lsblk -ndo FSTYPE "$root_probe" 2>/dev/null | head -n 1)"
+    [ -n "$root_label" ] || root_label="$(lsblk -ndo LABEL "$root_probe" 2>/dev/null | head -n 1)"
+    [ -n "$root_uuid" ] || root_uuid="$(lsblk -ndo UUID "$root_probe" 2>/dev/null | head -n 1)"
+fi
+if command -v blkid >/dev/null 2>&1; then
+    [ -n "$root_type" ] || root_type="$(blkid -s TYPE -o value "$root_probe" 2>/dev/null || true)"
+    [ -n "$root_label" ] || root_label="$(blkid -s LABEL -o value "$root_probe" 2>/dev/null || true)"
+    [ -n "$root_uuid" ] || root_uuid="$(blkid -s UUID -o value "$root_probe" 2>/dev/null || true)"
+fi
+
 pid1_comm="$(cat /proc/1/comm 2>/dev/null || true)"
 pid1_exe="$(readlink -f /proc/1/exe 2>/dev/null || true)"
 sshd_status="stopped-or-unknown"
@@ -95,6 +120,9 @@ marker_pid1_comm=$pid1_comm
 marker_pid1_exe=$pid1_exe
 marker_root_source=$root_source
 marker_root_resolved=$root_resolved
+marker_root_majmin=$root_majmin
+marker_root_sysfs=$root_sysfs
+marker_root_devname=$root_devname
 marker_root_type=$root_type
 marker_root_label=$root_label
 marker_root_uuid=$root_uuid
@@ -171,7 +199,8 @@ chmod 700 "$REMOTE_SCRIPT"
     echo "deployment_report=$DEPLOYMENT_REPORT"
     echo "deployment_report_sha256=$(sha256sum "$DEPLOYMENT_REPORT" | awk '{print $1}')"
     echo "expected_root_uuid=$EXPECTED_ROOT_UUID"
-    echo "expected_root_resolved=$EXPECTED_ROOT_RESOLVED"
+    echo "expected_root_devname=$EXPECTED_ROOT_DEVNAME"
+    echo "expected_marker_resolved=$EXPECTED_MARKER_RESOLVED"
     echo "privacy=user-content-and-credentials-excluded"
 } | tee "$OUT/manifest.txt"
 
@@ -196,6 +225,9 @@ PID1_COMM="$(marker marker_pid1_comm)"
 PID1_EXE="$(marker marker_pid1_exe)"
 ROOT_SOURCE="$(marker marker_root_source)"
 ROOT_RESOLVED="$(marker marker_root_resolved)"
+ROOT_MAJMIN="$(marker marker_root_majmin)"
+ROOT_SYSFS="$(marker marker_root_sysfs)"
+ROOT_DEVNAME="$(marker marker_root_devname)"
 ROOT_TYPE="$(marker marker_root_type)"
 ROOT_LABEL="$(marker marker_root_label)"
 ROOT_UUID="$(marker marker_root_uuid)"
@@ -211,13 +243,13 @@ MARKER_UUID="$(marker marker_deployment_uuid)"
 
 CORE_STATUS=requires-manual-review
 if [[ "$PID1_COMM" == init && \
-      "$ROOT_RESOLVED" == "$EXPECTED_ROOT_RESOLVED" && \
+      "$ROOT_DEVNAME" == "$EXPECTED_ROOT_DEVNAME" && \
       "$ROOT_TYPE" == ext4 && \
       "$ROOT_LABEL" == pmOS_root && \
       "$ROOT_UUID" == "$EXPECTED_ROOT_UUID" && \
       "$MARKER_TARGET" == android-userdata && \
       "$MARKER_BLOCK" == /dev/block/by-name/userdata && \
-      "$MARKER_RESOLVED" == "$EXPECTED_ROOT_RESOLVED" && \
+      "$MARKER_RESOLVED" == "$EXPECTED_MARKER_RESOLVED" && \
       "$MARKER_UUID" == "$EXPECTED_ROOT_UUID" && \
       "$SSHD_STATUS" == started && \
       "$USB_IPV4" == 172.16.42.1/* ]]; then
@@ -229,6 +261,9 @@ fi
     echo "pid1_exe=${PID1_EXE:-unknown}"
     echo "root_source=${ROOT_SOURCE:-unknown}"
     echo "root_resolved=${ROOT_RESOLVED:-unknown}"
+    echo "root_majmin=${ROOT_MAJMIN:-unknown}"
+    echo "root_sysfs=${ROOT_SYSFS:-unknown}"
+    echo "root_devname=${ROOT_DEVNAME:-unknown}"
     echo "root_type=${ROOT_TYPE:-unknown}"
     echo "root_label=${ROOT_LABEL:-unknown}"
     echo "root_uuid=${ROOT_UUID:-unknown}"
