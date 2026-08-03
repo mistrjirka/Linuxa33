@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-03  
 **Device:** Samsung Galaxy A33 5G (`samsung-a33x`)  
-**Status:** current normal postmarketOS rootfs validated; no safe internal deployment target approved; removable storage required for the first real-rootfs boot.
+**Status:** normal postmarketOS rootfs validated; cache rejected; active plan changed to internal `userdata` repurposing after explicit user approval to remove Android data.
 
 ## Proven rootfs image
 
@@ -33,53 +33,51 @@ cache_result=too-small
 userdata=/dev/block/sda36
 userdata_bytes=114240258048
 userdata_mounted_in_twrp=no
-userdata_early_boot_access=unproven
 
 removable_device_count=0
 ```
 
-No mount, format, block write, or persistent phone write occurred.
+No mount, format, block write, or persistent phone write occurred during that audit.
 
-## Decision
+## Updated decision
 
-The current rootfs cannot fit in the 600 MiB cache partition:
+The current rootfs cannot fit in the 600 MiB cache partition. The user explicitly does not want an SD-card dependency and accepts removing Android data.
 
-- its actual used data is already about 607 MiB;
-- its verified ext4 minimum is about 802 MiB;
-- a safe cache deployment would require additional working margin.
+The active internal-storage plan is therefore:
 
-`userdata` is not approved because TWRP did not mount it and early Linux access through Android FBE is unproven.
+```text
+preserve GPT and partition boundaries
+preserve super and all logical Android partitions for now
+preserve Android boot for the first test
+repurpose only /dev/block/by-name/userdata as ext4 pmOS_root
+boot the exact proven U0g recovery image
+allow the unchanged pmOS initramfs to find, resize, mount, and switch_root
+```
 
-The following remain prohibited:
+This destroys Android applications, accounts, settings, media, and encryption state stored in userdata. It does not yet reclaim `super` and does not replace Android `boot`.
 
-- generic recovery ZIP installation to `system`;
-- writes to `super` or a logical Android system device;
-- writes to Android `boot` before rootfs handoff is proven through `recovery`;
-- destructive repartitioning of `userdata`.
+The generic recovery ZIP remains prohibited because its `system` target resolution and partitioning logic are unsafe for this device's dynamic-partition layout.
+
+## Current implementation
+
+See:
+
+```text
+docs/A33_INTERNAL_USERDATA_ROOTFS_PLAN_2026-08-03.md
+scripts/prepare-a33-userdata-rootfs-image.sh
+scripts/backup-a33-before-userdata-repurpose.sh
+scripts/deploy-a33-rootfs-to-userdata.sh
+```
+
+The first two scripts are non-destructive. The deployment script requires an exact destructive confirmation token and refuses unless the private backup preflight passed for the exact image and current userdata mapping.
 
 ## Next milestone
 
-Insert a removable microSD card of at least 4 GiB, preferably 8 GiB or larger, then rerun:
-
-```bash
-bash scripts/audit-a33-rootfs-storage-capacity-v3.sh
-```
-
-The audit must report a removable whole-device candidate and:
-
-```text
-decision=external-removable-rootfs-preferred
-```
-
-After exact removable-device identity, capacity, current partition table, and content-risk confirmation are captured, the next implementation is:
-
-1. create an explicitly destructive, fail-closed microSD deployment tool;
-2. back up the microSD partition table before modification;
-3. write the validated `pmOS_root` image only to the confirmed removable target;
-4. verify the resulting ext4 UUID, label, and sampled/full hash as applicable;
-5. build U0h while preserving U0g exactly;
-6. have U0h locate `LABEL=pmOS_root` or the exact UUID, mount it and `switch_root`;
-7. boot U0h through the recovery partition;
-8. validate `ping 172.16.42.1` and `ssh jirka@172.16.42.1`.
+1. prepare the userdata-specific root image with the separate `/boot` mount removed;
+2. create a private host-side rescue bundle and sanitized preflight archive;
+3. write the validated root image to userdata;
+4. verify complete readback hash and rootfs contents;
+5. flash and boot the exact U0g recovery candidate;
+6. validate `ping 172.16.42.1` and `ssh jirka@172.16.42.1`.
 
 Wi-Fi and display work remain later stages after persistent rootfs boot and SSH over USB are proven.
