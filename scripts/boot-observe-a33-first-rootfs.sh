@@ -24,6 +24,10 @@ for command in "$ADB" sha256sum awk grep date mkdir tar ip ping timeout bash lsu
         exit 1
     }
 done
+if [[ ! "$MAX_SECONDS" =~ ^[0-9]+$ || "$MAX_SECONDS" -lt 1 || "$MAX_SECONDS" -gt 900 ]]; then
+    echo "REFUSING: MAX_SECONDS must be an integer from 1 through 900" >&2
+    exit 1
+fi
 
 value() {
     local file="$1" key="$2"
@@ -50,7 +54,16 @@ if [[ ! -f "$DEPLOYMENT_REPORT" || "$(value "$DEPLOYMENT_REPORT" deployment_stat
     echo "REFUSING: deployment report referenced by flash report is invalid" >&2
     exit 1
 fi
+if [[ "$(sha256sum "$DEPLOYMENT_REPORT" | awk '{print $1}')" != \
+      "$(value "$FLASH_REPORT" deployment_report_sha256)" ]]; then
+    echo "REFUSING: deployment report changed after the recovery flash" >&2
+    exit 1
+fi
 ROOT_UUID="$(value "$DEPLOYMENT_REPORT" filesystem_uuid)"
+[[ -n "$ROOT_UUID" ]] || {
+    echo "REFUSING: deployment report has no root UUID" >&2
+    exit 1
+}
 
 mkdir -p "$OUT"
 {
@@ -73,13 +86,41 @@ PREBOOT="$(
     "$ADB" shell sh -s -- "$ROOT_UUID" 2>/dev/null <<'SH' | tr -d '\r'
 set -eu
 expected_uuid="$1"
+target=/dev/block/by-name/userdata
+resolved="$(readlink -f "$target")"
 echo "recovery_sha=$(sha256sum /dev/block/by-name/recovery | awk 'NR==1 {print $1}')"
-echo "root_type=$(blkid -s TYPE -o value /dev/block/by-name/userdata 2>/dev/null || true)"
-echo "root_label=$(blkid -s LABEL -o value /dev/block/by-name/userdata 2>/dev/null || true)"
-echo "root_uuid=$(blkid -s UUID -o value /dev/block/by-name/userdata 2>/dev/null || true)"
-mount_users="$(awk '$1=="/dev/block/by-name/userdata" || $1=="/dev/block/sda36" {print $1 " " $2}' /proc/mounts 2>/dev/null || true)"
-echo "root_mount_users=$mount_users"
-[ "$(blkid -s UUID -o value /dev/block/by-name/userdata 2>/dev/null || true)" = "$expected_uuid" ]
+echo "root_resolved=$resolved"
+echo "root_readonly=$(blockdev --getro "$target" 2>/dev/null || true)"
+echo "root_type=$(blkid -s TYPE -o value "$target" 2>/dev/null || true)"
+echo "root_label=$(blkid -s LABEL -o value "$target" 2>/dev/null || true)"
+echo "root_uuid=$(blkid -s UUID -o value "$target" 2>/dev/null || true)"
+echo "mount_users_begin"
+awk '{print $1, $2}' /proc/mounts 2>/dev/null | while read -r source mountpoint; do
+    source_resolved="$(readlink -f "$source" 2>/dev/null || true)"
+    if [ "$source" = "$target" ] || [ "$source" = "$resolved" ] || [ "$source_resolved" = "$resolved" ]; then
+        echo "$source $mountpoint"
+    fi
+done
+echo "mount_users_end"
+echo "swap_users_begin"
+if [ -r /proc/swaps ]; then
+    tail -n +2 /proc/swaps 2>/dev/null | while read -r source rest; do
+        source_resolved="$(readlink -f "$source" 2>/dev/null || true)"
+        if [ "$source" = "$target" ] || [ "$source" = "$resolved" ] || [ "$source_resolved" = "$resolved" ]; then
+            echo "$source"
+        fi
+    done
+fi
+echo "swap_users_end"
+echo "dm_users_begin"
+for dm in /sys/block/dm-*; do
+    [ -e "$dm" ] || continue
+    if find "$dm/slaves" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | grep -qx "${resolved##*/}"; then
+        echo "${dm##*/}:$(cat "$dm/dm/name" 2>/dev/null || true)"
+    fi
+done
+echo "dm_users_end"
+[ "$(blkid -s UUID -o value "$target" 2>/dev/null || true)" = "$expected_uuid" ]
 SH
 )"
 
@@ -87,12 +128,24 @@ preboot_value() {
     local key="$1"
     printf '%s\n' "$PREBOOT" | awk -F= -v key="$key" '$1==key {print substr($0, length(key)+2); exit}'
 }
+preboot_section() {
+    local name="$1"
+    printf '%s\n' "$PREBOOT" | awk -v begin="${name}_begin" -v end="${name}_end" '
+        $0==begin {inside=1; next}
+        $0==end {inside=0}
+        inside && NF {print}
+    '
+}
 if [[ "$(preboot_value recovery_sha)" != "$EXPECTED_RECOVERY_SHA256" || \
+      "$(preboot_value root_resolved)" != /dev/block/sda36 || \
+      "$(preboot_value root_readonly)" != 0 || \
       "$(preboot_value root_type)" != ext4 || \
       "$(preboot_value root_label)" != pmOS_root || \
       "$(preboot_value root_uuid)" != "$ROOT_UUID" || \
-      -n "$(preboot_value root_mount_users)" ]]; then
-    echo "REFUSING: preboot recovery/rootfs state is not exact" >&2
+      -n "$(preboot_section mount_users)" || \
+      -n "$(preboot_section swap_users)" || \
+      -n "$(preboot_section dm_users)" ]]; then
+    echo "REFUSING: preboot recovery/rootfs state is not exact or rootfs is in use" >&2
     printf '%s\n' "$PREBOOT" >&2
     exit 1
 fi
