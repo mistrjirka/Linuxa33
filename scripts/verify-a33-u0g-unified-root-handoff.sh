@@ -14,7 +14,7 @@ UNPACK="${UNPACK:-$PORT_ROOT/aosp-mkbootimg/unpack_bootimg.py}"
 REPORT="$PORT_ROOT/build/a33-u0g-unified-root-handoff.txt"
 DETAILS="$PORT_ROOT/build/a33-u0g-unified-root-handoff-details.txt"
 
-for command in python3 sha256sum gzip cpio grep awk find file stat sed; do
+for command in python3 sha256sum gzip cpio grep awk find file stat; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required command: $command" >&2
         exit 1
@@ -107,41 +107,42 @@ init_lines = init_path.read_text(errors="replace").splitlines()
 init2 = init2_path.read_text(errors="replace")
 functions2 = functions2_path.read_text(errors="replace")
 
-# Match executable shell statements that invoke the embedded second stage.
-# Accepted forms include:
-#   /init_2nd.sh
-#   sh /init_2nd.sh
-#   exec /bin/sh /init_2nd.sh
-#   . /init_2nd.sh
-#   if ...; then /init_2nd.sh; fi
 invoke_re = re.compile(
-    r"(?:^|[;&|()])\s*(?:exec\s+)?(?:busybox\s+)?"
-    r"(?:(?:/bin/)?sh\s+|(?:source|\.)\s+)?/?init_2nd\.sh"
-    r"(?=$|[\s;&|)])"
+    r"(?:^|[;&|()]|\bthen\b|\bdo\b)\s*"
+    r"(?:exec\s+)?(?:busybox\s+)?"
+    r"(?:(?:/bin/)?sh\s+|(?:source|\.)\s+)?"
+    r"[\"']?/?init_2nd\.sh[\"']?(?=$|[\s;&|)])"
 )
-extra_re = re.compile(r"(?:^|[;&|()])\s*extract_initramfs_extra(?=$|[\s;&|)])")
-extra_definition_re = re.compile(r"^\s*(?:function\s+)?extract_initramfs_extra\s*\(\s*\)")
+extra_definition_re = re.compile(
+    r"^\s*(?:function\s+)?extract_initramfs_extra\s*\(\s*\)"
+)
+reference_test_re = re.compile(
+    r"(?:^|[;&|()]|\bthen\b)\s*(?:test\s+|\[\s*)-[a-zA-Z]+\s+"
+    r"[\"']?/?init_2nd\.sh"
+)
 
 invocations = []
 extra_calls = []
+raw_references = []
 for lineno, raw in enumerate(init_lines, 1):
     stripped = raw.strip()
     if not stripped or stripped.startswith("#"):
         continue
-    if invoke_re.search(stripped):
+    if "init_2nd.sh" in stripped:
+        raw_references.append((lineno, stripped))
+    if invoke_re.search(stripped) and not reference_test_re.search(stripped):
         invocations.append((lineno, stripped))
-    if not extra_definition_re.search(stripped) and extra_re.search(stripped):
+    if (
+        "extract_initramfs_extra" in stripped
+        and not extra_definition_re.search(stripped)
+        and not stripped.startswith("#")
+    ):
         extra_calls.append((lineno, stripped))
 
 if not invocations:
-    matches = [
-        f"{number}:{line}"
-        for number, line in enumerate(init_lines, 1)
-        if "init_2nd.sh" in line
-    ]
     raise SystemExit(
         "REFUSING: /init contains no executable invocation of /init_2nd.sh; "
-        f"raw references={matches}"
+        f"raw references={raw_references}"
     )
 
 invocation_line, invocation_text = invocations[0]
