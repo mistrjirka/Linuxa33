@@ -14,6 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 AUDIT_SCRIPT="$SCRIPT_DIR/audit-a33-first-rootfs-transport-bound-final.sh"
 AUDIT_REPORT="${AUDIT_REPORT:-$PORT_ROOT/build/a33-first-rootfs-transport-bound-final-audit.txt}"
 TRANSPORT_REPORT="$PORT_ROOT/build/a33-first-rootfs-transport-final-audit.txt"
+COMMAND_AUDIT="$SCRIPT_DIR/audit-a33-command-capabilities.sh"
+COMMAND_REPORT="$PORT_ROOT/build/a33-command-capabilities.txt"
 FINAL_CHAIN_REPORT="$PORT_ROOT/build/a33-first-rootfs-chain-final-audit.txt"
 STAGE_REPORT="$PORT_ROOT/build/a33-userdata-rootfs-stage.txt"
 DEPLOY="$SCRIPT_DIR/deploy-a33-rootfs-to-userdata.sh"
@@ -25,8 +27,8 @@ REFUSING: final destructive wrapper requires the exact token:
   bash $0 $REQUIRED_CONFIRMATION
 
 Run scripts/audit-a33-first-rootfs-transport-bound-final.sh immediately before
-this command. It proves and binds the actual ADB push/exec-out transport and all
-underlying rescue and deployment artifacts.
+this command. It proves and binds the actual allowed host, ADB, TWRP and rootfs
+commands, the full ADB push/exec-out transport, and every rescue artifact.
 EOF
     exit 2
 fi
@@ -39,8 +41,9 @@ for command in sha256sum awk readlink stat; do
 done
 
 for required in \
-    "$SELF" "$AUDIT_SCRIPT" "$AUDIT_REPORT" \
-    "$TRANSPORT_REPORT" "$FINAL_CHAIN_REPORT" "$STAGE_REPORT" "$DEPLOY"; do
+    "$SELF" "$AUDIT_SCRIPT" "$AUDIT_REPORT" "$TRANSPORT_REPORT" \
+    "$COMMAND_AUDIT" "$COMMAND_REPORT" "$FINAL_CHAIN_REPORT" \
+    "$STAGE_REPORT" "$DEPLOY"; do
     [[ -f "$required" ]] || {
         echo "REFUSING: required bound deployment file is missing: $required" >&2
         exit 1
@@ -54,8 +57,10 @@ value() {
 
 if [[ "$(value transport_bound_final_audit_status)" != passed || \
       "$(value transport_final_audit_status)" != passed || \
+      "$(value command_capability_audit_status)" != passed || \
       "$(value final_chain_audit_status)" != passed || \
       "$(value staging_status)" != passed || \
+      "$(value all_command_capability_bindings)" != passed || \
       "$(value all_underlying_artifact_bindings)" != passed || \
       "$(value adb_exec_in_required)" != no || \
       "$(value adb_push_full_image)" != passed || \
@@ -66,7 +71,7 @@ if [[ "$(value transport_bound_final_audit_status)" != passed || \
       "$(value private_backup_checksums)" != passed || \
       "$(value rescue_assets_status)" != passed || \
       "$(value persistent_phone_partition_writes)" != no ]]; then
-    echo "REFUSING: bound real-transport audit did not pass" >&2
+    echo "REFUSING: bound command and transport audit did not pass" >&2
     cat "$AUDIT_REPORT" >&2
     exit 1
 fi
@@ -84,10 +89,13 @@ compare_hash() {
 
 compare_hash bound_audit_script_sha256 "$AUDIT_SCRIPT"
 compare_hash transport_audit_report_sha256 "$TRANSPORT_REPORT"
+compare_hash command_capability_report_sha256 "$COMMAND_REPORT"
+compare_hash command_audit_script_sha256 "$COMMAND_AUDIT"
 compare_hash final_chain_audit_report_sha256 "$FINAL_CHAIN_REPORT"
 compare_hash stage_report_sha256 "$STAGE_REPORT"
 
 SCRIPTS=(
+    audit-a33-command-capabilities.sh
     stage-a33-userdata-rootfs-in-twrp.sh
     deploy-a33-rootfs-to-userdata.sh
     execute-a33-first-rootfs-deployment.sh
@@ -98,6 +106,7 @@ SCRIPTS=(
     restore-a33-twrp-odin.sh
 )
 KEYS=(
+    command_audit_script_sha256
     stage_script_sha256
     deploy_script_sha256
     execute_script_sha256
