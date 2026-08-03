@@ -22,7 +22,7 @@ done
 if [[ -z "$ARTIFACT_DIR" ]]; then
     ARTIFACT_DIR="$(
         find "$ARTIFACT_ROOT" -mindepth 1 -maxdepth 1 -type d \
-            -name '20????????-??????' -printf '%T@ %p\n' 2>/dev/null \
+            -name '20??????-??????' -printf '%T@ %p\n' 2>/dev/null \
         | sort -nr \
         | awk 'NR==1 {sub(/^[^ ]+ /, ""); print}'
     )"
