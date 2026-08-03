@@ -10,6 +10,8 @@ PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 RESULT_ROOT="${RESULT_ROOT:-$PORT_ROOT/build/runtime-results}"
 SSH_TARGET="${SSH_TARGET:-jirka@172.16.42.1}"
 OBSERVATION_DIR="${OBSERVATION_DIR:-}"
+DEPLOYMENT_REPORT="$PORT_ROOT/build/a33-userdata-rootfs-deployment.txt"
+EXPECTED_ROOT_RESOLVED="/dev/block/sda36"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="$RESULT_ROOT/a33-first-rootfs-live-$TIMESTAMP"
 ARCHIVE="$OUT.tar.gz"
@@ -20,6 +22,21 @@ for command in ssh sha256sum awk grep find sort tar date mkdir cp mktemp; do
         exit 1
     }
 done
+
+value() {
+    local file="$1" key="$2"
+    awk -F= -v key="$key" '$1==key {print substr($0, length(key)+2); exit}' "$file"
+}
+
+if [[ ! -f "$DEPLOYMENT_REPORT" || "$(value "$DEPLOYMENT_REPORT" deployment_status)" != passed ]]; then
+    echo "REFUSING: successful userdata deployment report is missing" >&2
+    exit 1
+fi
+EXPECTED_ROOT_UUID="$(value "$DEPLOYMENT_REPORT" filesystem_uuid)"
+[[ -n "$EXPECTED_ROOT_UUID" ]] || {
+    echo "REFUSING: deployment report has no filesystem UUID" >&2
+    exit 1
+}
 
 if [[ -z "$OBSERVATION_DIR" ]]; then
     OBSERVATION_DIR="$(
@@ -33,10 +50,6 @@ if [[ -z "$OBSERVATION_DIR" || ! -f "$OBSERVATION_DIR/summary.txt" ]]; then
     echo "REFUSING: first-rootfs observation result is missing" >&2
     exit 1
 fi
-value() {
-    local file="$1" key="$2"
-    awk -F= -v key="$key" '$1==key {print substr($0, length(key)+2); exit}' "$file"
-}
 if [[ "$(value "$OBSERVATION_DIR/summary.txt" observation_status)" != passed-rootfs-network-and-ssh-ready ]]; then
     echo "REFUSING: observation did not prove network and SSH readiness" >&2
     cat "$OBSERVATION_DIR/summary.txt" >&2
@@ -58,9 +71,11 @@ section() {
 
 root_source="$(findmnt -n -o SOURCE / 2>/dev/null || awk '$2=="/" {print $1; exit}' /proc/mounts)"
 root_resolved="$(readlink -f "$root_source" 2>/dev/null || true)"
-root_type="$(blkid -s TYPE -o value "$root_source" 2>/dev/null || true)"
-root_label="$(blkid -s LABEL -o value "$root_source" 2>/dev/null || true)"
-root_uuid="$(blkid -s UUID -o value "$root_source" 2>/dev/null || true)"
+root_probe="$root_source"
+[ -b "$root_resolved" ] && root_probe="$root_resolved"
+root_type="$(blkid -s TYPE -o value "$root_probe" 2>/dev/null || true)"
+root_label="$(blkid -s LABEL -o value "$root_probe" 2>/dev/null || true)"
+root_uuid="$(blkid -s UUID -o value "$root_probe" 2>/dev/null || true)"
 pid1_comm="$(cat /proc/1/comm 2>/dev/null || true)"
 pid1_exe="$(readlink -f /proc/1/exe 2>/dev/null || true)"
 sshd_status="stopped-or-unknown"
@@ -68,8 +83,12 @@ rc-service sshd status >/dev/null 2>&1 && sshd_status=started
 networkmanager_status="stopped-or-unknown"
 rc-service networkmanager status >/dev/null 2>&1 && networkmanager_status=started
 usb_ipv4="$(ip -o -4 addr show 2>/dev/null | awk '$4 ~ /^172\.16\.42\.1\// {print $4; exit}')"
-root_block_bytes="$(blockdev --getsize64 "$root_source" 2>/dev/null || true)"
+root_block_bytes="$(blockdev --getsize64 "$root_probe" 2>/dev/null || true)"
 root_df_bytes="$(df -P -k / 2>/dev/null | awk 'NR==2 {print $2 * 1024; exit}')"
+marker_target="$(awk -F= '$1=="target" {print $2; exit}' /etc/a33x-rootfs-target 2>/dev/null || true)"
+marker_block="$(awk -F= '$1=="expected_block" {print $2; exit}' /etc/a33x-rootfs-target 2>/dev/null || true)"
+marker_resolved="$(awk -F= '$1=="expected_resolved" {print $2; exit}' /etc/a33x-rootfs-target 2>/dev/null || true)"
+marker_uuid="$(awk -F= '$1=="root_uuid" {print $2; exit}' /etc/a33x-rootfs-target 2>/dev/null || true)"
 
 cat <<EOF
 marker_pid1_comm=$pid1_comm
@@ -84,6 +103,10 @@ marker_root_df_bytes=$root_df_bytes
 marker_sshd_status=$sshd_status
 marker_networkmanager_status=$networkmanager_status
 marker_usb_ipv4=$usb_ipv4
+marker_deployment_target=$marker_target
+marker_deployment_block=$marker_block
+marker_deployment_resolved=$marker_resolved
+marker_deployment_uuid=$marker_uuid
 EOF
 
 section identity
@@ -145,6 +168,10 @@ chmod 700 "$REMOTE_SCRIPT"
     echo "operation=collect-first-rootfs-live-over-ssh"
     echo "ssh_target=$SSH_TARGET"
     echo "observation_dir=$OBSERVATION_DIR"
+    echo "deployment_report=$DEPLOYMENT_REPORT"
+    echo "deployment_report_sha256=$(sha256sum "$DEPLOYMENT_REPORT" | awk '{print $1}')"
+    echo "expected_root_uuid=$EXPECTED_ROOT_UUID"
+    echo "expected_root_resolved=$EXPECTED_ROOT_RESOLVED"
     echo "privacy=user-content-and-credentials-excluded"
 } | tee "$OUT/manifest.txt"
 
@@ -156,8 +183,6 @@ SSH_OPTIONS=(
     -o UserKnownHostsFile="$PORT_ROOT/build/a33-first-rootfs-known-hosts"
 )
 
-# One SSH connection; password authentication, if needed, is requested once by
-# the local OpenSSH client through the controlling terminal.
 ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" 'sh -s' \
     < "$REMOTE_SCRIPT" \
     > "$OUT/phone-live.txt" 2> "$OUT/ssh.stderr"
@@ -179,11 +204,21 @@ ROOT_DF_BYTES="$(marker marker_root_df_bytes)"
 SSHD_STATUS="$(marker marker_sshd_status)"
 NETWORKMANAGER_STATUS="$(marker marker_networkmanager_status)"
 USB_IPV4="$(marker marker_usb_ipv4)"
+MARKER_TARGET="$(marker marker_deployment_target)"
+MARKER_BLOCK="$(marker marker_deployment_block)"
+MARKER_RESOLVED="$(marker marker_deployment_resolved)"
+MARKER_UUID="$(marker marker_deployment_uuid)"
 
 CORE_STATUS=requires-manual-review
 if [[ "$PID1_COMM" == init && \
+      "$ROOT_RESOLVED" == "$EXPECTED_ROOT_RESOLVED" && \
       "$ROOT_TYPE" == ext4 && \
       "$ROOT_LABEL" == pmOS_root && \
+      "$ROOT_UUID" == "$EXPECTED_ROOT_UUID" && \
+      "$MARKER_TARGET" == android-userdata && \
+      "$MARKER_BLOCK" == /dev/block/by-name/userdata && \
+      "$MARKER_RESOLVED" == "$EXPECTED_ROOT_RESOLVED" && \
+      "$MARKER_UUID" == "$EXPECTED_ROOT_UUID" && \
       "$SSHD_STATUS" == started && \
       "$USB_IPV4" == 172.16.42.1/* ]]; then
     CORE_STATUS=passed-real-rootfs-and-ssh
@@ -199,6 +234,10 @@ fi
     echo "root_uuid=${ROOT_UUID:-unknown}"
     echo "root_block_bytes=${ROOT_BLOCK_BYTES:-unknown}"
     echo "root_filesystem_bytes=${ROOT_DF_BYTES:-unknown}"
+    echo "deployment_marker_target=${MARKER_TARGET:-unknown}"
+    echo "deployment_marker_block=${MARKER_BLOCK:-unknown}"
+    echo "deployment_marker_resolved=${MARKER_RESOLVED:-unknown}"
+    echo "deployment_marker_uuid=${MARKER_UUID:-unknown}"
     echo "sshd_status=${SSHD_STATUS:-unknown}"
     echo "networkmanager_status=${NETWORKMANAGER_STATUS:-unknown}"
     echo "usb_ipv4=${USB_IPV4:-unknown}"
@@ -211,6 +250,7 @@ for source in \
     "$PORT_ROOT/build/a33-userdata-rootfs-deployment.txt" \
     "$PORT_ROOT/build/a33-first-rootfs-u0g-flash.txt" \
     "$PORT_ROOT/build/a33-u0g-unified-root-handoff.txt" \
+    "$PORT_ROOT/build/a33-first-rootfs-chain-final-audit.txt" \
     "$PORT_ROOT/build/a33-userdata-rootfs-image.txt"; do
     [[ -f "$source" ]] && cp -a "$source" "$OUT/"
 done
