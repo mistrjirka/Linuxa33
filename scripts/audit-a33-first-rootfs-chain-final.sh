@@ -49,19 +49,30 @@ fi
 until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
     sleep 1
 done
-SWAP_USERS="$(
+SWAP_STATE="$(
     "$ADB" shell sh -s -- "$EXPECTED_USERDATA_RESOLVED" 2>/dev/null <<'SH' | tr -d '\r'
 expected="$1"
-if [ -r /proc/swaps ]; then
-    tail -n +2 /proc/swaps 2>/dev/null | while read -r source rest; do
-        resolved="$(readlink -f "$source" 2>/dev/null || true)"
-        if [ "$source" = /dev/block/by-name/userdata ] || [ "$source" = "$expected" ] || [ "$resolved" = "$expected" ]; then
-            echo "$source"
-        fi
-    done
+if [ ! -r /proc/swaps ]; then
+    echo "proc_swaps_readable=no"
+    exit 0
 fi
+echo "proc_swaps_readable=yes"
+echo "swap_users_begin"
+tail -n +2 /proc/swaps 2>/dev/null | while read -r source rest; do
+    resolved="$(readlink -f "$source" 2>/dev/null || true)"
+    if [ "$source" = /dev/block/by-name/userdata ] || [ "$source" = "$expected" ] || [ "$resolved" = "$expected" ]; then
+        echo "$source"
+    fi
+done
+echo "swap_users_end"
 SH
 )"
+PROC_SWAPS_READABLE="$(printf '%s\n' "$SWAP_STATE" | awk -F= '$1=="proc_swaps_readable" {print $2; exit}')"
+SWAP_USERS="$(printf '%s\n' "$SWAP_STATE" | awk '/^swap_users_begin$/ {i=1; next} /^swap_users_end$/ {i=0} i && NF')"
+if [[ "$PROC_SWAPS_READABLE" != yes ]]; then
+    echo "REFUSING: /proc/swaps is not readable in TWRP" >&2
+    exit 1
+fi
 if [[ -n "$SWAP_USERS" ]]; then
     echo "REFUSING: userdata is configured as swap" >&2
     echo "$SWAP_USERS" >&2
@@ -74,6 +85,7 @@ fi
     echo "base_audit_script_sha256=$(sha256sum "$BASE_AUDIT" | awk '{print $1}')"
     echo "execute_script_sha256=$(sha256sum "$EXECUTE_SCRIPT" | awk '{print $1}')"
     echo "execute_script_syntax=passed"
+    echo "proc_swaps_readable=yes"
     echo "userdata_swap_users=none"
     echo "final_phone_writes=no"
     echo "final_audit_status=passed"
