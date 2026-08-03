@@ -31,6 +31,23 @@ safe_value() {
     fi
 }
 
+create_metadata_node_from_sysfs() {
+    [ -r /sys/class/block/sda26/dev ] || return 1
+
+    devnum="$(cat /sys/class/block/sda26/dev 2>/dev/null || true)"
+    major="${devnum%%:*}"
+    minor="${devnum##*:}"
+    case "$major:$minor" in
+        *[!0-9:]*|:|*:)
+            return 1
+            ;;
+    esac
+
+    mkdir -p /dev/block
+    mknod /dev/block/sda26 b "$major" "$minor" 2>/dev/null || true
+    [ -b /dev/block/sda26 ]
+}
+
 mkdir -p /run /dev
 ensure_kmsg
 
@@ -120,6 +137,7 @@ relative_file=u0f-muic-result.txt
 log_u0f "RAM report ready path=$report"
 
 metadata_device=""
+metadata_node_created=no
 attempt=0
 while [ "$attempt" -lt 50 ]; do
     for candidate in /dev/block/by-name/metadata /dev/block/sda26 /dev/sda26; do
@@ -129,6 +147,14 @@ while [ "$attempt" -lt 50 ]; do
         fi
     done
     [ -n "$metadata_device" ] && break
+
+    if create_metadata_node_from_sysfs; then
+        metadata_device=/dev/block/sda26
+        metadata_node_created=yes
+        log_u0f "created metadata block node from sysfs path=$metadata_device"
+        break
+    fi
+
     attempt=$((attempt + 1))
     sleep 0.1
 done
@@ -165,6 +191,7 @@ chmod 0700 "$result_dir" 2>/dev/null || true
 {
     echo "metadata_device=$metadata_device"
     echo "metadata_resolved=${resolved_device:-unknown}"
+    echo "metadata_node_created=$metadata_node_created"
     echo "metadata_mount=rw"
 } >> "$report"
 
