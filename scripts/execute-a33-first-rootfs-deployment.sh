@@ -51,6 +51,9 @@ if [[ "$(value audit_status)" != passed || \
       "$(value obsolete_cache_scripts)" != refusing-stubs || \
       "$(value u0g_handoff_status)" != passed || \
       "$(value private_backup_checksums)" != passed || \
+      "$(value rescue_assets_status)" != passed || \
+      "$(value rescue_twrp_sha256)" != 414df197c21de25fc5627cd3a4d8a59011bef0141cfa479560c48aa378d3ad7e || \
+      "$(value rescue_odin_sha256)" != 6754aa54f2abe6e99ece32414cd34c8b23b28dbddde537a33203036813637c3b || \
       "$(value userdata_unmounted)" != yes || \
       "$(value userdata_device_mapper_users)" != none || \
       "$(value proc_swaps_readable)" != yes || \
@@ -78,6 +81,7 @@ check_script observe_script_sha256 "$SCRIPT_DIR/boot-observe-a33-first-rootfs.sh
 check_script live_collector_sha256 "$SCRIPT_DIR/collect-a33-first-rootfs-live.sh"
 check_script failure_collector_sha256 "$SCRIPT_DIR/collect-a33-first-rootfs-previous-boot.sh"
 check_script restore_script_sha256 "$SCRIPT_DIR/restore-a33-twrp-odin.sh"
+check_script rescue_verify_script_sha256 "$SCRIPT_DIR/verify-a33-twrp-rescue-assets.sh"
 
 HANDOFF="$PORT_ROOT/build/a33-u0g-unified-root-handoff.txt"
 IMAGE="$(readlink -f "$PORT_ROOT/build/userdata-rootfs-images/current/a33x-userdata-pmos-root.img" 2>/dev/null || true)"
@@ -85,8 +89,9 @@ IMAGE_MANIFEST="$(readlink -f "$PORT_ROOT/build/userdata-rootfs-images/current/m
 PREFLIGHT_DIR="$(value private_backup_dir)"
 PREFLIGHT_MANIFEST="$PREFLIGHT_DIR/manifest.txt"
 PREFLIGHT_SUMS="$PREFLIGHT_DIR/SHA256SUMS"
+RESCUE_REPORT="$PORT_ROOT/build/a33-twrp-rescue-assets.txt"
 
-for required in "$HANDOFF" "$IMAGE" "$IMAGE_MANIFEST" "$PREFLIGHT_MANIFEST" "$PREFLIGHT_SUMS"; do
+for required in "$HANDOFF" "$IMAGE" "$IMAGE_MANIFEST" "$PREFLIGHT_MANIFEST" "$PREFLIGHT_SUMS" "$RESCUE_REPORT"; do
     [[ -f "$required" ]] || {
         echo "REFUSING: audited input is missing: $required" >&2
         exit 1
@@ -109,6 +114,7 @@ compare_hash userdata_image_sha256 "$IMAGE"
 compare_hash userdata_image_manifest_sha256 "$IMAGE_MANIFEST"
 compare_hash private_backup_manifest_sha256 "$PREFLIGHT_MANIFEST"
 compare_hash private_backup_sha256sums_sha256 "$PREFLIGHT_SUMS"
+compare_hash rescue_assets_report_sha256 "$RESCUE_REPORT"
 
 if [[ "$(stat -Lc '%s' "$IMAGE")" != "$(value userdata_image_size)" ]]; then
     echo "REFUSING: audited userdata image size changed" >&2
