@@ -8,7 +8,8 @@ export LANG=C
 
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 ADB="${ADB:-adb}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 BASE_AUDIT="$SCRIPT_DIR/audit-a33-first-rootfs-chain.sh"
 EXECUTE_SCRIPT="$SCRIPT_DIR/execute-a33-first-rootfs-deployment.sh"
 RESCUE_VERIFY="$SCRIPT_DIR/verify-a33-twrp-rescue-assets.sh"
@@ -17,24 +18,25 @@ RESCUE_REPORT="$PORT_ROOT/build/a33-twrp-rescue-assets.txt"
 FINAL_REPORT="$PORT_ROOT/build/a33-first-rootfs-chain-final-audit.txt"
 EXPECTED_USERDATA_RESOLVED="/dev/block/sda36"
 
-for command in bash "$ADB" sha256sum awk date tee grep; do
+for command in bash "$ADB" sha256sum awk date tee grep readlink; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required command: $command" >&2
         exit 1
     }
 done
-for required in "$BASE_AUDIT" "$EXECUTE_SCRIPT" "$RESCUE_VERIFY"; do
+for required in "$SELF" "$BASE_AUDIT" "$EXECUTE_SCRIPT" "$RESCUE_VERIFY"; do
     [[ -f "$required" ]] || {
         echo "Missing required script: $required" >&2
         exit 1
     }
 done
 
+bash -n "$SELF"
 bash -n "$BASE_AUDIT"
 bash -n "$EXECUTE_SCRIPT"
 bash -n "$RESCUE_VERIFY"
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -S error "$BASE_AUDIT" "$EXECUTE_SCRIPT" "$RESCUE_VERIFY"
+    shellcheck -S error "$SELF" "$BASE_AUDIT" "$EXECUTE_SCRIPT" "$RESCUE_VERIFY"
 fi
 
 bash "$BASE_AUDIT"
@@ -97,6 +99,7 @@ fi
 {
     cat "$BASE_REPORT"
     echo "final_audit_created=$(date -Ins)"
+    echo "final_audit_script_sha256=$(sha256sum "$SELF" | awk '{print $1}')"
     echo "base_audit_script_sha256=$(sha256sum "$BASE_AUDIT" | awk '{print $1}')"
     echo "execute_script_sha256=$(sha256sum "$EXECUTE_SCRIPT" | awk '{print $1}')"
     echo "execute_script_syntax=passed"
