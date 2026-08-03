@@ -134,8 +134,10 @@ if ! grep -Fqx "UUID=$SOURCE_UUID / ext4 defaults 0 1" "$FINAL_FSTAB"; then
     cat "$FINAL_FSTAB" >&2
     exit 1
 fi
-if grep -Eq '(^|[[:space:]])/boot([[:space:]]|$)' "$FINAL_FSTAB"; then
-    echo "REFUSING: final fstab still contains a /boot mount" >&2
+# Validate only active fstab entries. The explanatory comment intentionally
+# mentions /boot and must not be interpreted as a mount declaration.
+if grep -Eq '(^|[[:space:]])/boot([[:space:]]|$)' <<<"$non_comment_lines"; then
+    echo "REFUSING: final fstab still contains an active /boot mount" >&2
     exit 1
 fi
 
