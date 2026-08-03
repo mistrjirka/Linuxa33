@@ -53,6 +53,7 @@ if [[ "$(value audit_status)" != passed || \
       "$(value private_backup_checksums)" != passed || \
       "$(value userdata_unmounted)" != yes || \
       "$(value userdata_device_mapper_users)" != none || \
+      "$(value proc_swaps_readable)" != yes || \
       "$(value userdata_swap_users)" != none ]]; then
     echo "REFUSING: final complete-chain audit report did not pass" >&2
     cat "$AUDIT_REPORT" >&2
