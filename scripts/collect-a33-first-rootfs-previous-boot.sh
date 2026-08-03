@@ -28,7 +28,7 @@ done
 until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
     sleep 1
 done
-RECOVERY_SHA="$($ADB shell 'sha256sum /dev/block/by-name/recovery' | awk 'NR==1 {print $1}' | tr -d '\r')"
+RECOVERY_SHA="$("$ADB" shell 'sha256sum /dev/block/by-name/recovery' | awk 'NR==1 {print $1}' | tr -d '\r')"
 if [[ "$RECOVERY_SHA" != "$EXPECTED_TWRP_SHA256" ]]; then
     echo "REFUSING: exact known-good TWRP has not been restored" >&2
     echo "expected=$EXPECTED_TWRP_SHA256 actual=${RECOVERY_SHA:-missing}" >&2
@@ -55,6 +55,15 @@ set -u
 target=/dev/block/by-name/userdata
 mountpoint=/tmp/a33x-first-rootfs-failure-check
 resolved="$(readlink -f "$target" 2>/dev/null || true)"
+mounted_here=no
+
+cleanup() {
+    if [ "$mounted_here" = yes ]; then
+        umount "$mountpoint" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
 echo "target=$target"
 echo "resolved=$resolved"
 echo "bytes=$(blockdev --getsize64 "$target" 2>/dev/null || true)"
@@ -73,8 +82,7 @@ echo "mount_users_end"
 umount "$mountpoint" 2>/dev/null || true
 mkdir -p "$mountpoint"
 if mount -t ext4 -o ro,noload,nosuid,nodev,noatime "$target" "$mountpoint"; then
-    cleanup() { umount "$mountpoint" 2>/dev/null || true; }
-    trap cleanup EXIT
+    mounted_here=yes
     echo "readonly_mount=passed"
     for path in \
         /sbin/init \
@@ -96,14 +104,24 @@ if mount -t ext4 -o ro,noload,nosuid,nodev,noatime "$target" "$mountpoint"; then
     cat "$mountpoint/etc/a33x-rootfs-target" 2>&1 || true
     echo "marker_end"
     df -h "$mountpoint" 2>&1 || true
+
+    if umount "$mountpoint"; then
+        mounted_here=no
+        echo "readonly_unmount=passed"
+    else
+        echo "readonly_unmount=failed"
+    fi
 else
     echo "readonly_mount=failed"
 fi
 
-if command -v e2fsck >/dev/null 2>&1; then
+# e2fsck is run only after the collector's verification mount is released.
+if [ "$mounted_here" = no ] && command -v e2fsck >/dev/null 2>&1; then
     echo "e2fsck_readonly_begin"
     e2fsck -fn "$target" 2>&1 || true
     echo "e2fsck_readonly_end"
+else
+    echo "e2fsck_readonly=skipped-target-still-mounted-or-tool-missing"
 fi
 SH
 
@@ -112,7 +130,8 @@ for source in \
     "$PORT_ROOT/build/a33-first-rootfs-u0g-flash.txt" \
     "$PORT_ROOT/build/a33-u0g-unified-root-handoff.txt" \
     "$PORT_ROOT/build/a33-u0g-unified-root-handoff-details.txt" \
-    "$PORT_ROOT/build/a33-userdata-rootfs-image.txt"; do
+    "$PORT_ROOT/build/a33-userdata-rootfs-image.txt" \
+    "$PORT_ROOT/build/a33-first-rootfs-chain-audit.txt"; do
     [[ -f "$source" ]] && cp -a "$source" "$OUT/"
 done
 
@@ -131,6 +150,7 @@ ROOT_TYPE="$(awk -F= '$1=="type" {print $2; exit}' "$OUT/userdata-rootfs-readonl
 ROOT_LABEL="$(awk -F= '$1=="label" {print $2; exit}' "$OUT/userdata-rootfs-readonly-check.txt")"
 ROOT_UUID="$(awk -F= '$1=="uuid" {print $2; exit}' "$OUT/userdata-rootfs-readonly-check.txt")"
 ROOT_MOUNT="$(awk -F= '$1=="readonly_mount" {print $2; exit}' "$OUT/userdata-rootfs-readonly-check.txt")"
+ROOT_UNMOUNT="$(awk -F= '$1=="readonly_unmount" {print $2; exit}' "$OUT/userdata-rootfs-readonly-check.txt")"
 
 {
     echo "created=$(date -Ins)"
@@ -140,6 +160,7 @@ ROOT_MOUNT="$(awk -F= '$1=="readonly_mount" {print $2; exit}' "$OUT/userdata-roo
     echo "rootfs_label=${ROOT_LABEL:-unknown}"
     echo "rootfs_uuid=${ROOT_UUID:-unknown}"
     echo "rootfs_readonly_mount=${ROOT_MOUNT:-unknown}"
+    echo "rootfs_readonly_unmount=${ROOT_UNMOUNT:-unknown}"
     echo "phone_partition_writes=no"
     echo "collection_status=passed"
 } | tee "$OUT/first-rootfs-summary.txt"
