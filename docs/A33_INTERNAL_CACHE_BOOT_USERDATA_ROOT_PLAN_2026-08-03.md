@@ -1,74 +1,79 @@
-# A33 internal cache-boot and userdata-root plan
+# A33 cache-boot plan correction: cache is not required
 
 **Date:** 2026-08-03  
 **Device:** Samsung Galaxy A33 5G (`samsung-a33x`)  
-**Status:** userdata root image and private preflight passed; destructive deployment is still blocked pending cache boot preparation and expanded preflight.
+**Status:** the earlier cache=`pmOS_boot` requirement was incorrect and is retired.
 
-## Critical correction
+## What exposed the error
 
-A userdata-only `pmOS_root` deployment is insufficient for the proven U0g initramfs.
+`prepare-a33-cache-boot-image.sh` correctly found that the generated
+`pmOS_boot` filesystem has no `/initramfs-extra` file. Its actual boot-deploy
+contents include `/initramfs` and `/samsung-a33x.dtb`.
 
-The postmarketOS initramfs sequence mounts a filesystem labeled `pmOS_boot`, extracts `/boot/initramfs-extra`, and only then waits for and mounts `pmOS_root` before `switch_root`.
-
-The first internal-storage layout must therefore be:
-
-```text
-recovery partition -> exact proven U0g kernel/initramfs boot image
-cache partition    -> pmOS_boot filesystem
-userdata partition -> pmOS_root filesystem
-```
-
-## Proven capacities
+This is expected for the current unified postmarketOS initramfs design because
+the A33 device definition does not set:
 
 ```text
-cache    = /dev/block/sda33 = 629145600 bytes
-pmOS_boot image             = 510656512 bytes
-
-userdata = /dev/block/sda36 = 114240258048 bytes
-pmOS_root image             = 802160640 bytes
+deviceinfo_create_initfs_extra="true"
 ```
 
-Both images fit their intended targets.
+That option defaults to false. The exact U0g recovery ramdisk embeds
+`/init_2nd.sh` directly and can enter second-stage root discovery before the
+optional initramfs-extra fallback.
 
-## Existing successful evidence
+## Correct first internal layout
 
-The prepared userdata root image passed:
+```text
+recovery partition -> exact proven U0g recovery candidate
+userdata partition -> ext4 filesystem labeled pmOS_root
+cache partition    -> unchanged Android cache
+```
 
-- ext4 label `pmOS_root`;
-- UUID `7b056328-bdfb-496b-ac38-2624c43c863a`;
-- `/sbin/init` present;
-- OpenSSH present and enabled;
-- NetworkManager present and enabled;
-- U0g helper/hooks present;
-- root-only `/etc/fstab` with no active `/boot` entry;
-- read-only `e2fsck`.
+The first experiment remains one functional change: a valid `pmOS_root`
+filesystem appears on `/dev/block/by-name/userdata`.
 
-The initial private preflight passed for userdata and preserved:
+## Required proof
 
-- UFS GPT prefix/suffix;
-- boot/recovery and boot-chain partitions;
-- metadata and selected persistent partitions;
-- first/last userdata samples;
-- complete hashes.
+Run:
 
-It was not a full Android user-data backup.
+```bash
+bash scripts/verify-a33-u0g-unified-root-handoff.sh
+```
 
-## Required next actions
+It verifies the exact U0g recovery and ramdisk hashes, extracts the real
+ramdisk, and requires:
 
-1. Validate and copy the extracted `pmOS_boot` filesystem with `scripts/prepare-a33-cache-boot-image.sh`.
-2. Run `scripts/complete-a33-internal-layout-preflight.sh`.
-3. That preflight must back up the entire 600 MiB Android cache partition privately and prove that both cache and userdata are unmounted and unused by device mapper.
-4. Only after the sanitized expanded preflight is reviewed may a new combined deployment script write:
-   - `pmOS_boot` to cache first;
-   - verify its full hash, label, and `initramfs-extra`;
-   - `pmOS_root` to userdata second;
-   - verify its full hash, label, UUID, fstab, and required files.
-5. Flash and boot the exact U0g recovery candidate; do not change U0g for this first rootfs test.
-6. Validate USB network and SSH.
-7. Grow the ext4 root filesystem to the full userdata partition only after first userspace boot is proven.
+- embedded `/init_2nd.sh`;
+- direct second-stage execution before optional `initramfs-extra` extraction;
+- `wait_root_partition`;
+- `mount_root_partition`;
+- `pmOS_root` discovery;
+- `switch_root`;
+- no explicit `deviceinfo_create_initfs_extra=true`.
 
-## Prohibited path
+Only a report ending in `verification_status=passed` re-enables the gated
+userdata deployment script.
 
-`scripts/deploy-a33-rootfs-to-userdata.sh` now refuses execution. Writing userdata alone would leave U0g unable to find `pmOS_boot` and it would not reach the rootfs handoff.
+## Safety state
 
-The generic postmarketOS recovery ZIP remains prohibited. `system`, `super`, Android `boot`, and the GPT are not touched in this stage.
+The prior private userdata backup/preflight remains valid for the exact prepared
+root image:
+
+```text
+deployment_sha256=79c94efe41da14e72e82cfc66c8e6fac6f04482fa2ea2af024f6b1ebb67d3951
+userdata=/dev/block/sda36
+userdata_bytes=114240258048
+```
+
+No phone partition was written during the failed cache preparation. Cache,
+userdata, super, boot and recovery remain unchanged.
+
+## Retired scripts
+
+These scripts now refuse execution because their premise was wrong:
+
+- `scripts/prepare-a33-cache-boot-image.sh`
+- `scripts/complete-a33-internal-layout-preflight.sh`
+
+The generic recovery ZIP remains prohibited. `system`, `super`, Android `boot`,
+cache and the GPT are not modified in the first real-rootfs test.
