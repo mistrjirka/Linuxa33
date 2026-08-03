@@ -71,7 +71,7 @@ fi
 
 echo "=== Capture persistent U0f metadata result when present ==="
 METADATA_CAPTURE="$OUT/u0f-metadata-result.txt"
-if ! "$ADB" shell sh -s -- \
+if "$ADB" shell sh -s -- \
     "$METADATA_DEVICE" "$METADATA_MOUNTPOINT" "$METADATA_RESULT_RELATIVE" \
     > "$METADATA_CAPTURE" <<'SH'
 set -eu
@@ -135,6 +135,8 @@ cat "$target"
 echo "metadata_result_end"
 SH
 then
+    metadata_rc=0
+else
     metadata_rc=$?
     case "$LABEL" in
         u0f*)
