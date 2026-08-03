@@ -18,13 +18,18 @@ for command in git rsync mkdir; do
     fi
 done
 
-for required in \
-    "$LOCAL_PORTS/device/downstream/linux-samsung-a33x/APKBUILD" \
-    "$LOCAL_PORTS/device/downstream/device-samsung-a33x/APKBUILD" \
-    "$LOCAL_PORTS/main/postmarketos-mkinitfs-hook-a33x-watchdog/APKBUILD" \
-    "$LOCAL_PORTS/main/postmarketos-mkinitfs-hook-a33x-usbpd/APKBUILD" \
-    "$LOCAL_PORTS/main/postmarketos-mkinitfs-hook-a33x-muic-switch/APKBUILD"
-do
+custom_aports=(
+    device/downstream/linux-samsung-a33x/APKBUILD
+    device/downstream/device-samsung-a33x/APKBUILD
+    main/postmarketos-mkinitfs-hook-a33x-watchdog/APKBUILD
+    main/postmarketos-mkinitfs-hook-a33x-usbpd/APKBUILD
+    main/postmarketos-mkinitfs-hook-a33x-muic-switch/APKBUILD
+    main/postmarketos-mkinitfs-hook-a33x-muic-switch-dynamic/APKBUILD
+    main/postmarketos-mkinitfs-hook-a33x-muic-persist-dynamic/APKBUILD
+)
+
+for relative in "${custom_aports[@]}"; do
+    required="$LOCAL_PORTS/$relative"
     if [[ ! -f "$required" ]]; then
         echo "Missing Linuxa33 custom aport: $required" >&2
         exit 1
@@ -51,20 +56,25 @@ else
 fi
 
 echo "=== Overlay Linuxa33 custom aports and local prebuilt payloads ==="
+# Do not use --delete. Locally generated files such as the guarded
+# device-samsung-a33x/modules-initfs are intentionally retained.
 rsync -a "$LOCAL_PORTS/" "$PMAPORTS/"
 
-for required in \
-    "$PMAPORTS/device/downstream/linux-samsung-a33x/APKBUILD" \
-    "$PMAPORTS/device/downstream/linux-samsung-a33x/Image" \
-    "$PMAPORTS/device/downstream/linux-samsung-a33x/samsung-a33x.dtb" \
-    "$PMAPORTS/device/downstream/linux-samsung-a33x/recovery_dtbo" \
-    "$PMAPORTS/device/downstream/device-samsung-a33x/APKBUILD" \
-    "$PMAPORTS/main/postmarketos-mkinitfs-hook-a33x-watchdog/APKBUILD" \
-    "$PMAPORTS/main/postmarketos-mkinitfs-hook-a33x-usbpd/APKBUILD" \
-    "$PMAPORTS/main/postmarketos-mkinitfs-hook-a33x-muic-switch/APKBUILD"
-do
+for relative in "${custom_aports[@]}"; do
+    required="$PMAPORTS/$relative"
     if [[ ! -f "$required" ]]; then
         echo "REFUSING: pmaports overlay is incomplete: $required" >&2
+        exit 1
+    fi
+done
+
+for required in \
+    "$PMAPORTS/device/downstream/linux-samsung-a33x/Image" \
+    "$PMAPORTS/device/downstream/linux-samsung-a33x/samsung-a33x.dtb" \
+    "$PMAPORTS/device/downstream/linux-samsung-a33x/recovery_dtbo"
+do
+    if [[ ! -f "$required" ]]; then
+        echo "REFUSING: pmaports overlay is missing local prebuilt payload: $required" >&2
         exit 1
     fi
 done
@@ -74,7 +84,13 @@ cat <<EOF
 Third-host pmaports checkout is ready:
   $PMAPORTS
 
-Now run:
+Confirmed U0g packages are present:
+  postmarketos-mkinitfs-hook-a33x-watchdog
+  postmarketos-mkinitfs-hook-a33x-usbpd
+  postmarketos-mkinitfs-hook-a33x-muic-switch-dynamic
+  postmarketos-mkinitfs-hook-a33x-muic-persist-dynamic
+
+On a fresh host, run:
   pmbootstrap init
 
 Select the existing custom device samsung-a33x and the edge channel.
