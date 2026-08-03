@@ -10,8 +10,9 @@ CONFIRMATION="${1:-}"
 REQUIRED_CONFIRMATION="ERASE-ANDROID-USERDATA-INSTALL-PMOS"
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUDIT_REPORT="${AUDIT_REPORT:-$PORT_ROOT/build/a33-first-rootfs-chain-audit.txt}"
+AUDIT_REPORT="${AUDIT_REPORT:-$PORT_ROOT/build/a33-first-rootfs-chain-final-audit.txt}"
 DEPLOY="$SCRIPT_DIR/deploy-a33-rootfs-to-userdata.sh"
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 
 if [[ "$CONFIRMATION" != "$REQUIRED_CONFIRMATION" ]]; then
     cat >&2 <<EOF
@@ -19,7 +20,7 @@ REFUSING: final destructive wrapper requires the exact token:
 
   bash $0 $REQUIRED_CONFIRMATION
 
-Run scripts/audit-a33-first-rootfs-chain.sh immediately before this command.
+Run scripts/audit-a33-first-rootfs-chain-final.sh immediately before this command.
 EOF
     exit 2
 fi
@@ -32,7 +33,7 @@ for command in sha256sum awk readlink stat; do
 done
 
 [[ -f "$AUDIT_REPORT" && -f "$DEPLOY" ]] || {
-    echo "REFUSING: complete-chain audit report or deploy implementation is missing" >&2
+    echo "REFUSING: final chain-audit report or deploy implementation is missing" >&2
     exit 1
 }
 
@@ -42,14 +43,17 @@ value() {
 }
 
 if [[ "$(value audit_status)" != passed || \
+      "$(value final_audit_status)" != passed || \
       "$(value phone_writes)" != no || \
+      "$(value final_phone_writes)" != no || \
       "$(value bash_syntax_all)" != passed || \
+      "$(value execute_script_syntax)" != passed || \
       "$(value obsolete_cache_scripts)" != refusing-stubs || \
       "$(value u0g_handoff_status)" != passed || \
       "$(value private_backup_checksums)" != passed || \
       "$(value userdata_unmounted)" != yes || \
       "$(value userdata_device_mapper_users)" != none ]]; then
-    echo "REFUSING: complete-chain audit report did not pass" >&2
+    echo "REFUSING: final complete-chain audit report did not pass" >&2
     cat "$AUDIT_REPORT" >&2
     exit 1
 fi
@@ -65,6 +69,7 @@ check_script() {
     fi
 }
 
+check_script execute_script_sha256 "$SELF"
 check_script deploy_script_sha256 "$SCRIPT_DIR/deploy-a33-rootfs-to-userdata.sh"
 check_script flash_script_sha256 "$SCRIPT_DIR/flash-a33-u0g-after-userdata-deploy.sh"
 check_script observe_script_sha256 "$SCRIPT_DIR/boot-observe-a33-first-rootfs.sh"
