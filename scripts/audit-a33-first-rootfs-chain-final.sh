@@ -7,13 +7,15 @@ export LC_ALL=C
 export LANG=C
 
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
+ADB="${ADB:-adb}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_AUDIT="$SCRIPT_DIR/audit-a33-first-rootfs-chain.sh"
 EXECUTE_SCRIPT="$SCRIPT_DIR/execute-a33-first-rootfs-deployment.sh"
 BASE_REPORT="$PORT_ROOT/build/a33-first-rootfs-chain-audit.txt"
 FINAL_REPORT="$PORT_ROOT/build/a33-first-rootfs-chain-final-audit.txt"
+EXPECTED_USERDATA_RESOLVED="/dev/block/sda36"
 
-for command in bash sha256sum awk date tee; do
+for command in bash "$ADB" sha256sum awk date tee grep; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required command: $command" >&2
         exit 1
@@ -44,12 +46,35 @@ if [[ "$(value audit_status)" != passed || "$(value phone_writes)" != no ]]; the
     exit 1
 fi
 
+until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
+    sleep 1
+done
+SWAP_USERS="$(
+    "$ADB" shell sh -s -- "$EXPECTED_USERDATA_RESOLVED" 2>/dev/null <<'SH' | tr -d '\r'
+expected="$1"
+if [ -r /proc/swaps ]; then
+    tail -n +2 /proc/swaps 2>/dev/null | while read -r source rest; do
+        resolved="$(readlink -f "$source" 2>/dev/null || true)"
+        if [ "$source" = /dev/block/by-name/userdata ] || [ "$source" = "$expected" ] || [ "$resolved" = "$expected" ]; then
+            echo "$source"
+        fi
+    done
+fi
+SH
+)"
+if [[ -n "$SWAP_USERS" ]]; then
+    echo "REFUSING: userdata is configured as swap" >&2
+    echo "$SWAP_USERS" >&2
+    exit 1
+fi
+
 {
     cat "$BASE_REPORT"
     echo "final_audit_created=$(date -Ins)"
     echo "base_audit_script_sha256=$(sha256sum "$BASE_AUDIT" | awk '{print $1}')"
     echo "execute_script_sha256=$(sha256sum "$EXECUTE_SCRIPT" | awk '{print $1}')"
     echo "execute_script_syntax=passed"
+    echo "userdata_swap_users=none"
     echo "final_phone_writes=no"
     echo "final_audit_status=passed"
 } | tee "$FINAL_REPORT"
