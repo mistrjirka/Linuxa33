@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Allow MUIC_NONE for real USB UFP attach in the exact A33 TWRP module.
+"""Patch or restore the exact A33 Type-C MUIC_NONE gate instruction.
 
-This recovery-only diagnostic patch changes one instruction in
+The recovery-only U0d diagnostic changes one instruction in
 usb_typec_manager.ko, inside manager_usb_event_send():
 
     mov w9, #0x16    ->    mov w9, #0x17
@@ -12,8 +12,9 @@ existing range check, duplicate check, real PDIC timing, and all other cable
 classification behavior unchanged.
 
 The script parses the ELF, validates the exact original module and surrounding
-AArch64 instruction sequence, and can prove that a patched module differs from
-the known original by this instruction alone.
+AArch64 instruction sequence, can prove that a patched module differs from the
+known original by this instruction alone, and can restore that exact original
+binary from a verified patched copy.
 """
 
 from __future__ import annotations
@@ -222,10 +223,19 @@ def validate_context(data: bytes, context_file_offset: int, target: bytes) -> No
         )
 
 
+def reconstructed_original(data: bytes, file_offset: int) -> bytes:
+    restored = bytearray(data)
+    restored[file_offset : file_offset + 4] = ORIGINAL_INSN
+    return bytes(restored)
+
+
 def reconstructed_original_sha(data: bytes, file_offset: int) -> str:
-    reconstructed = bytearray(data)
-    reconstructed[file_offset : file_offset + 4] = ORIGINAL_INSN
-    return sha256(bytes(reconstructed))
+    return sha256(reconstructed_original(data, file_offset))
+
+
+def write_output(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
 
 
 def main() -> int:
@@ -236,12 +246,15 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--verify-original", action="store_true")
     mode.add_argument("--verify-patched", action="store_true")
+    mode.add_argument("--restore-original", action="store_true")
     args = parser.parse_args()
 
     if not args.module.is_file():
         parser.error(f"module does not exist: {args.module}")
     if (args.verify_original or args.verify_patched) and args.output is not None:
         parser.error("verification modes cannot be combined with --output")
+    if args.restore_original and args.output is None:
+        parser.error("--restore-original requires --output")
 
     data = args.module.read_bytes()
     if MODULE_SIGNATURE_MARKER in data[-4096:]:
@@ -282,6 +295,32 @@ def main() -> int:
         output_data = data
         output_path = args.module
         status = "verified-patched"
+    elif args.restore_original:
+        if current != PATCHED_INSN:
+            raise PatchError(
+                f"cannot restore: expected patched instruction at file offset 0x{file_offset:x}, "
+                f"found {current.hex()}"
+            )
+        validate_context(data, context_file_offset, PATCHED_INSN)
+        output_data = reconstructed_original(data, file_offset)
+        if sha256(output_data) != EXPECTED_ORIGINAL_SHA256:
+            raise PatchError(
+                "restored module SHA256 does not match the exact analyzed original: "
+                f"expected {EXPECTED_ORIGINAL_SHA256}, found {sha256(output_data)}"
+            )
+        restored_offset, restored_context, restored_value, restored_size = locate_patch(output_data)
+        if (restored_offset, restored_context, restored_value, restored_size) != (
+            file_offset,
+            context_file_offset,
+            symbol_value,
+            symbol_size,
+        ):
+            raise PatchError("ELF layout changed unexpectedly while restoring")
+        validate_context(output_data, restored_context, ORIGINAL_INSN)
+        assert args.output is not None
+        write_output(args.output, output_data)
+        output_path = args.output
+        status = "restored-original"
     else:
         if args.output is None:
             parser.error("--output is required when patching")
@@ -300,8 +339,7 @@ def main() -> int:
         patched = bytearray(data)
         patched[file_offset : file_offset + 4] = PATCHED_INSN
         output_data = bytes(patched)
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_bytes(output_data)
+        write_output(args.output, output_data)
         output_path = args.output
         status = "patched"
 
