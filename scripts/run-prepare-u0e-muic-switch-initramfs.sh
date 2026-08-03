@@ -13,6 +13,10 @@ RUNTIME="$SCRIPT_DIR/.prepare-u0e-muic-switch-initramfs.runtime.$$"
 STATE_FILE="$PORT_ROOT/build/third-host-pmbootstrap-state.txt"
 
 BASE_HOOK_PACKAGES="postmarketos-mkinitfs-hook-a33x-watchdog,postmarketos-mkinitfs-hook-a33x-usbpd,postmarketos-mkinitfs-hook-debug-shell"
+CUSTOM_BASE_HOOK_PACKAGES=(
+    postmarketos-mkinitfs-hook-a33x-watchdog
+    postmarketos-mkinitfs-hook-a33x-usbpd
+)
 
 for command in pmbootstrap python3; do
     if ! command -v "$command" >/dev/null 2>&1; then
@@ -39,6 +43,11 @@ if [[ -f "$STATE_FILE" ]]; then
     mv -f "$STATE_FILE" "$STATE_FILE.invalid"
     echo "Quarantined unverified state marker: $STATE_FILE.invalid"
 fi
+
+echo "=== Refresh checksums for local U0d base hooks ==="
+for package in "${CUSTOM_BASE_HOOK_PACKAGES[@]}"; do
+    pmbootstrap checksum "$package"
+done
 
 echo "=== Install and verify U0d base initramfs hooks ==="
 pmbootstrap chroot -r --add "$BASE_HOOK_PACKAGES" -- true
