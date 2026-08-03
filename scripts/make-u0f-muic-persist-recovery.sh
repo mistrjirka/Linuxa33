@@ -5,12 +5,13 @@ trap 'rc=$?; echo "ERROR: ${BASH_SOURCE[0]} failed at line $LINENO: $BASH_COMMAN
 
 ROOT="${ROOT:-$HOME/a33-port}"
 EXPECTED_MODULE_COUNT="${EXPECTED_MODULE_COUNT:-67}"
+EXPECTED_TYPEC_SHA256="${EXPECTED_TYPEC_SHA256:-de92f9dc0d29d671bd20f42ad01688e0584eb8e43f6826ff2643e0767c814641}"
+EXPECTED_PDIC_SHA256="${EXPECTED_PDIC_SHA256:-5442a4cf5d4f12f394e5c3d4f5f01785929427fa71101731ea16bd00d0840161}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INITRAMFS="$ROOT/export-debug/initramfs"
 U0B_MODULES="$ROOT/build/u0b-embedded-modules.txt"
-U0E_REPORT="$ROOT/build/u0e-muic-switch-helper.txt"
 U0F_REPORT="$ROOT/build/u0f-muic-persist.txt"
 OUT="$ROOT/build/pmos-debug-recovery-u0f"
 CANDIDATE="$ROOT/build/candidates/a33x-h1-usbpd-u0f-muic-persist-recovery.img"
@@ -26,7 +27,6 @@ done
 for required in \
     "$INITRAMFS" \
     "$U0B_MODULES" \
-    "$U0E_REPORT" \
     "$U0F_REPORT" \
     "$REPO_ROOT/scripts/make-pmos-debug-recovery.sh"
 do
@@ -42,8 +42,8 @@ report_value() {
     awk -F= -v key="$key" '$1==key {print substr($0, length(key) + 2)}' "$file"
 }
 
-expected_typec_sha="$(report_value "$U0E_REPORT" patched_typec_sha256)"
-expected_pdic_sha="$(report_value "$U0E_REPORT" original_pdic_sha256)"
+expected_typec_sha="$EXPECTED_TYPEC_SHA256"
+expected_pdic_sha="$EXPECTED_PDIC_SHA256"
 expected_i2c_sha="$(report_value "$U0F_REPORT" retained_u0e_i2c_dev_sha256)"
 expected_helper_sha="$(report_value "$U0F_REPORT" retained_u0e_helper_sha256)"
 expected_hook03_sha="$(report_value "$U0F_REPORT" retained_u0e_hook03_sha256)"
@@ -256,6 +256,8 @@ fi
 recovery_sha="$(sha256sum "$CANDIDATE" | awk '{print $1}')"
 {
     cat "$U0F_REPORT"
+    echo "retained_u0d_typec_sha256=$expected_typec_sha"
+    echo "retained_u0d_pdic_sha256=$expected_pdic_sha"
     echo "recovery=$CANDIDATE"
     echo "recovery_size=$(stat -Lc '%s' "$CANDIDATE")"
     echo "recovery_sha256=$recovery_sha"
