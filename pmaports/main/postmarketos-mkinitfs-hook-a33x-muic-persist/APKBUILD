@@ -1,0 +1,18 @@
+pkgname=postmarketos-mkinitfs-hook-a33x-muic-persist
+pkgver=1
+pkgrel=0
+pkgdesc="Recovery-only persistent MUIC diagnostic result for Samsung Galaxy A33"
+url="https://github.com/mistrjirka/Linuxa33"
+arch="noarch"
+license="MIT"
+depends="postmarketos-mkinitfs"
+options="!check"
+source="04-a33x-muic-persist.sh"
+builddir="$srcdir"
+
+package() {
+	install -Dm755 "$srcdir/04-a33x-muic-persist.sh" \
+		"$pkgdir/usr/share/mkinitfs/hooks/04-a33x-muic-persist.sh"
+}
+
+sha512sums=""
