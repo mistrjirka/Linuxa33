@@ -6,15 +6,31 @@
 pkgname=device-samsung-a33x
 pkgdesc="Samsung Galaxy A33 5G"
 pkgver=3
-pkgrel=0
+pkgrel=1
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
 options="!check !archcheck"
 
+# The A33 USB-C data path was proven by U0g. Keep the working path as device
+# dependencies so a fresh `pmbootstrap install` cannot silently omit it:
+#
+# - watchdog continuity during early bring-up;
+# - explicit USB-PD activation while intentionally bypassing the unsafe full
+#   MUIC/CPIF/BTS soft-dependency closure;
+# - dynamic discovery of the I2C adapter backed by physical controller
+#   13860000.hsi2c, followed by the verified S2MU106 MUIC 0x17/0x24 sequence;
+# - temporary metadata persistence for the next normal-rootfs handoff test;
+# - debug-shell payload retained as a rescue facility, inactive unless the
+#   pmos.debug-shell kernel parameter is explicitly supplied.
 depends="
 	linux-samsung-a33x
 	postmarketos-base
+	postmarketos-mkinitfs-hook-debug-shell
+	postmarketos-mkinitfs-hook-a33x-watchdog
+	postmarketos-mkinitfs-hook-a33x-usbpd
+	postmarketos-mkinitfs-hook-a33x-muic-switch-dynamic
+	postmarketos-mkinitfs-hook-a33x-muic-persist-dynamic
 "
 makedepends="devicepkg-dev"
 
