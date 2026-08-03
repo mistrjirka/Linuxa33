@@ -54,7 +54,8 @@ FLASH_KERNEL="$(awk -F= '$1=="FLASH_KERNEL" {gsub(/^[[:space:]'"'"']+|[[:space:]
 
 {
     echo "created=$(date -Ins)"
-    echo "collection_policy=read-only-except-volatile-tmpfs-copy"
+    echo "audit_version=2"
+    echo "collection_policy=read-only-except-volatile-tmpfs-copy-and-chmod"
     echo "phone_required_mode=TWRP"
     echo "installer=$ZIP"
     echo "installer_sha256=$(sha256sum "$ZIP" | awk '{print $1}')"
@@ -66,13 +67,12 @@ FLASH_KERNEL="$(awk -F= '$1=="FLASH_KERNEL" {gsub(/^[[:space:]'"'"']+|[[:space:]
     echo "mount_operations=no"
 } | tee "$OUT/manifest.txt"
 
-# TWRP ADB quirk: do not use adb wait-for-device.
 echo "=== Wait for TWRP ADB shell ==="
 until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
     sleep 1
 done
 
-RECOVERY_SHA="$($ADB shell 'sha256sum /dev/block/by-name/recovery 2>/dev/null' | awk 'NR==1 {print $1}' | tr -d '\r')"
+RECOVERY_SHA="$("$ADB" shell 'sha256sum /dev/block/by-name/recovery 2>/dev/null' | awk 'NR==1 {print $1}' | tr -d '\r')"
 if [[ "$RECOVERY_SHA" != "$KNOWN_TWRP_SHA256" ]]; then
     echo "REFUSING: phone is not running the exact known-good TWRP" >&2
     echo "expected=$KNOWN_TWRP_SHA256" >&2
@@ -90,14 +90,25 @@ ROOT="$1"
 INSTALL_PARTITION="$2"
 FIND_FS="$ROOT/chroot/bin/findfs"
 LIBS="$ROOT/chroot/lib"
+LOADER="$LIBS/ld-musl-aarch64.so.1"
 
 safe_readlink() {
+    [ -n "${1:-}" ] || return 0
     readlink -f "$1" 2>/dev/null || true
 }
 
 block_size() {
+    [ -n "${1:-}" ] || return 0
     blockdev --getsize64 "$1" 2>/dev/null || true
 }
+
+run_findfs() {
+    query="$1"
+    LD_LIBRARY_PATH="$LIBS" "$LOADER" "$FIND_FS" "$query" 2>&1
+}
+
+chmod 0755 "$ROOT" "$ROOT/chroot" "$ROOT/chroot/bin" "$ROOT/chroot/lib" 2>/dev/null || true
+chmod 0755 "$FIND_FS" "$LOADER" 2>/dev/null || true
 
 fstab="/etc/recovery.fstab"
 [ -r "$fstab" ] || fstab="/etc/twrp.fstab"
@@ -107,9 +118,12 @@ echo "kernel=$(uname -r 2>/dev/null || true)"
 echo "recovery_hash=$(sha256sum /dev/block/by-name/recovery 2>/dev/null | awk 'NR==1 {print $1}')"
 echo "install_partition=$INSTALL_PARTITION"
 echo "fstab=$fstab"
+echo "findfs_mode=$(ls -l "$FIND_FS" 2>/dev/null || true)"
+echo "loader_mode=$(ls -l "$LOADER" 2>/dev/null || true)"
+echo "tmp_mount=$(awk '$2=="/tmp" {print; exit}' /proc/mounts 2>/dev/null || true)"
 
 echo "=== exact bundled findfs resolution ==="
-findfs_output="$(LD_LIBRARY_PATH="$LIBS" "$FIND_FS" "PARTLABEL=$INSTALL_PARTITION" 2>&1 || true)"
+findfs_output="$(run_findfs "PARTLABEL=$INSTALL_PARTITION" || true)"
 echo "findfs_partlabel_output=$findfs_output"
 findfs_target="$(printf '%s\n' "$findfs_output" | awk '/^\/dev\// {print; exit}')"
 echo "findfs_target=$findfs_target"
@@ -121,13 +135,40 @@ else
     echo "findfs_target_is_block=no"
 fi
 
-echo "=== exact fstab fallback calculation ==="
+echo "=== exact installer fstab fallback ==="
 src_column="$(awk '{for (i=1; i<=NF; ++i) { if ($i ~ /^\/dev/) {print i; exit;} }}' "$fstab" 2>/dev/null || true)"
 [ -n "$src_column" ] || src_column=3
-fstab_source="$(awk -v src="$src_column" -v part="$INSTALL_PARTITION" '!/^#/ && $0 ~ "(^|[[:space:]])/" part "([[:space:]]|$)" {print $src; exit}' "$fstab" 2>/dev/null || true)"
+fstab_source="$(awk -v src="$src_column" '!/^#/ && /(^|\s*)\/'"$INSTALL_PARTITION"'/ {print $src; exit;}' "$fstab" 2>/dev/null || true)"
+fstab_resolved="$(cd / && readlink -fn "$fstab_source" 2>/dev/null || true)"
 echo "fstab_source_column=$src_column"
 echo "fstab_source=$fstab_source"
-echo "fstab_source_readlink_fn=$(readlink -fn "$fstab_source" 2>/dev/null || true)"
+echo "fstab_resolved=$fstab_resolved"
+if [ -b "$fstab_resolved" ]; then
+    echo "fstab_target_is_block=yes"
+    echo "fstab_target_bytes=$(block_size "$fstab_resolved")"
+else
+    echo "fstab_target_is_block=no"
+fi
+
+effective_target=""
+effective_source=""
+if [ -n "$findfs_target" ]; then
+    effective_target="$findfs_target"
+    effective_source=findfs
+elif [ -n "$fstab_resolved" ]; then
+    effective_target="$fstab_resolved"
+    effective_source=fstab-fallback
+fi
+effective_resolved="$(safe_readlink "$effective_target")"
+echo "installer_effective_target=$effective_target"
+echo "installer_effective_source=$effective_source"
+echo "installer_effective_resolved=$effective_resolved"
+if [ -b "$effective_target" ]; then
+    echo "installer_effective_is_block=yes"
+    echo "installer_effective_bytes=$(block_size "$effective_target")"
+else
+    echo "installer_effective_is_block=no"
+fi
 
 echo "=== device-mapper links ==="
 ls -la /dev/block/mapper 2>&1 || true
@@ -153,31 +194,40 @@ for dm in /sys/block/dm-*; do
 done
 
 echo "=== exact selected target classification ==="
-resolved="$(safe_readlink "$findfs_target")"
+resolved="$effective_resolved"
 base="${resolved##*/}"
 dm_name=""
 case "$base" in
     dm-[0-9]*) dm_name="$(cat "/sys/block/$base/dm/name" 2>/dev/null || true)" ;;
 esac
-echo "selected_target=$findfs_target"
+echo "selected_target=$effective_target"
+echo "selected_source=$effective_source"
 echo "selected_resolved=$resolved"
 echo "selected_base=$base"
 echo "selected_dm_name=$dm_name"
-case "$base:$dm_name" in
-    dm-[0-9]*:system*) echo "selected_class=dynamic-logical-system" ;;
-    dm-[0-9]*:*) echo "selected_class=device-mapper-other" ;;
-    :*) echo "selected_class=unresolved" ;;
-    *) echo "selected_class=physical-or-standalone-block" ;;
-esac
+if [ -z "$effective_target" ]; then
+    echo "selected_class=unresolved"
+elif [ ! -b "$effective_target" ]; then
+    echo "selected_class=non-block-path"
+else
+    case "$base:$dm_name" in
+        dm-[0-9]*:system*) echo "selected_class=dynamic-logical-system" ;;
+        dm-[0-9]*:*) echo "selected_class=device-mapper-other" ;;
+        *) echo "selected_class=physical-or-standalone-block" ;;
+    esac
+fi
 
 echo "=== boot target resolution ==="
-boot_findfs="$(LD_LIBRARY_PATH="$LIBS" "$FIND_FS" PARTLABEL=boot 2>&1 || true)"
+boot_findfs="$(run_findfs PARTLABEL=boot || true)"
 echo "boot_findfs_output=$boot_findfs"
 boot_target="$(printf '%s\n' "$boot_findfs" | awk '/^\/dev\// {print; exit}')"
+boot_source=findfs
 if [ -z "$boot_target" ]; then
     boot_target=/dev/block/by-name/boot
+    boot_source=by-name-fallback
 fi
 echo "boot_target=$boot_target"
+echo "boot_target_source=$boot_source"
 echo "boot_target_resolved=$(safe_readlink "$boot_target")"
 echo "boot_target_bytes=$(block_size "$boot_target")"
 
@@ -190,7 +240,6 @@ echo "boot_contract=mkfs-ext2-or-ext4-on-selected-device-partition-1"
 echo "kernel_contract=dd-boot-img-to-boot-partition-when-FLASH_KERNEL-true"
 SH
 
-# Remove the volatile resolver immediately after capture.
 "$ADB" shell "rm -rf '$REMOTE_ROOT'"
 
 RESOLUTION="$OUT/twrp/exact-resolution.txt"
@@ -200,32 +249,49 @@ value() {
 }
 
 SELECTED_TARGET="$(value selected_target)"
+SELECTED_SOURCE="$(value selected_source)"
 SELECTED_RESOLVED="$(value selected_resolved)"
 SELECTED_DM_NAME="$(value selected_dm_name)"
 SELECTED_CLASS="$(value selected_class)"
-SELECTED_BYTES="$(value findfs_target_bytes)"
+SELECTED_BYTES="$(value installer_effective_bytes)"
+FINDFS_OUTPUT="$(value findfs_partlabel_output)"
+FSTAB_SOURCE="$(value fstab_source)"
+FSTAB_RESOLVED="$(value fstab_resolved)"
 BOOT_TARGET="$(value boot_target)"
+BOOT_SOURCE="$(value boot_target_source)"
 BOOT_RESOLVED="$(value boot_target_resolved)"
 BOOT_BYTES="$(value boot_target_bytes)"
 
 DECISION="manual-review-required"
-if [[ "$INSTALL_PARTITION" == system && "$SELECTED_CLASS" == dynamic-logical-system ]]; then
-    DECISION="standard-recovery-zip-not-approved-for-dynamic-system-target"
-elif [[ "$SELECTED_CLASS" == unresolved ]]; then
-    DECISION="standard-recovery-zip-not-approved-target-unresolved"
-fi
+case "$SELECTED_CLASS" in
+    dynamic-logical-system)
+        DECISION="standard-recovery-zip-not-approved-dynamic-system-container"
+        ;;
+    unresolved)
+        DECISION="standard-recovery-zip-not-approved-target-unresolved"
+        ;;
+    non-block-path)
+        DECISION="standard-recovery-zip-not-approved-fstab-fallback-is-not-block-device"
+        ;;
+esac
 
 {
+    echo "audit_version=2"
     echo "installer_sha256=$(sha256sum "$ZIP" | awk '{print $1}')"
     echo "twrp_recovery_sha256=$RECOVERY_SHA"
     echo "install_partition=$INSTALL_PARTITION"
     echo "flash_kernel=$FLASH_KERNEL"
+    echo "findfs_output=${FINDFS_OUTPUT:-none}"
+    echo "fstab_source=${FSTAB_SOURCE:-none}"
+    echo "fstab_resolved=${FSTAB_RESOLVED:-none}"
     echo "selected_target=${SELECTED_TARGET:-unknown}"
+    echo "selected_source=${SELECTED_SOURCE:-unknown}"
     echo "selected_resolved=${SELECTED_RESOLVED:-unknown}"
     echo "selected_dm_name=${SELECTED_DM_NAME:-none}"
     echo "selected_class=${SELECTED_CLASS:-unknown}"
     echo "selected_bytes=${SELECTED_BYTES:-unknown}"
     echo "boot_target=${BOOT_TARGET:-unknown}"
+    echo "boot_source=${BOOT_SOURCE:-unknown}"
     echo "boot_resolved=${BOOT_RESOLVED:-unknown}"
     echo "boot_bytes=${BOOT_BYTES:-unknown}"
     echo "persistent_phone_writes=no"
