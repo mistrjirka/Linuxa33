@@ -81,20 +81,39 @@ LIVE="$(
     "$ADB" shell sh -s -- "$USERDATA" 2>/dev/null <<'SH' | tr -d '\r'
 set -eu
 target="$1"
+resolved="$(readlink -f "$target")"
 echo "recovery_sha=$(sha256sum /dev/block/by-name/recovery | awk 'NR==1 {print $1}')"
-echo "userdata_resolved=$(readlink -f "$target")"
+echo "userdata_resolved=$resolved"
+echo "userdata_readonly=$(blockdev --getro "$target" 2>/dev/null || true)"
 echo "userdata_type=$(blkid -s TYPE -o value "$target" 2>/dev/null || true)"
 echo "userdata_label=$(blkid -s LABEL -o value "$target" 2>/dev/null || true)"
 echo "userdata_uuid=$(blkid -s UUID -o value "$target" 2>/dev/null || true)"
-echo "userdata_mounts_begin"
-resolved="$(readlink -f "$target")"
+echo "mount_users_begin"
 awk '{print $1, $2}' /proc/mounts | while read -r source mountpoint; do
     source_resolved="$(readlink -f "$source" 2>/dev/null || true)"
     if [ "$source" = "$target" ] || [ "$source" = "$resolved" ] || [ "$source_resolved" = "$resolved" ]; then
         echo "$source $mountpoint"
     fi
 done
-echo "userdata_mounts_end"
+echo "mount_users_end"
+echo "swap_users_begin"
+if [ -r /proc/swaps ]; then
+    tail -n +2 /proc/swaps 2>/dev/null | while read -r source rest; do
+        source_resolved="$(readlink -f "$source" 2>/dev/null || true)"
+        if [ "$source" = "$target" ] || [ "$source" = "$resolved" ] || [ "$source_resolved" = "$resolved" ]; then
+            echo "$source"
+        fi
+    done
+fi
+echo "swap_users_end"
+echo "dm_users_begin"
+for dm in /sys/block/dm-*; do
+    [ -e "$dm" ] || continue
+    if find "$dm/slaves" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | grep -qx "${resolved##*/}"; then
+        echo "${dm##*/}:$(cat "$dm/dm/name" 2>/dev/null || true)"
+    fi
+done
+echo "dm_users_end"
 SH
 )"
 
@@ -102,17 +121,29 @@ live_value() {
     local key="$1"
     printf '%s\n' "$LIVE" | awk -F= -v key="$key" '$1==key {print substr($0, length(key)+2); exit}'
 }
-MOUNTS="$(printf '%s\n' "$LIVE" | awk '/^userdata_mounts_begin$/ {i=1; next} /^userdata_mounts_end$/ {i=0} i && NF')"
+section() {
+    local name="$1"
+    printf '%s\n' "$LIVE" | awk -v begin="${name}_begin" -v end="${name}_end" '
+        $0==begin {inside=1; next}
+        $0==end {inside=0}
+        inside && NF {print}
+    '
+}
+MOUNTS="$(section mount_users)"
+SWAPS="$(section swap_users)"
+DM_USERS="$(section dm_users)"
 
 if [[ "$(live_value recovery_sha)" != "$KNOWN_TWRP_SHA256" ]]; then
     echo "REFUSING: recovery is not exact known-good TWRP before candidate flash" >&2
     exit 1
 fi
-if [[ "$(live_value userdata_type)" != ext4 || \
+if [[ "$(live_value userdata_resolved)" != /dev/block/sda36 || \
+      "$(live_value userdata_readonly)" != 0 || \
+      "$(live_value userdata_type)" != ext4 || \
       "$(live_value userdata_label)" != pmOS_root || \
       "$(live_value userdata_uuid)" != "$DEPLOYMENT_UUID" || \
-      -n "$MOUNTS" ]]; then
-    echo "REFUSING: deployed userdata rootfs is missing, wrong, or mounted" >&2
+      -n "$MOUNTS" || -n "$SWAPS" || -n "$DM_USERS" ]]; then
+    echo "REFUSING: deployed userdata rootfs is wrong, read-only, or still in use" >&2
     printf '%s\n' "$LIVE" >&2
     exit 1
 fi
@@ -155,7 +186,7 @@ dd if="$image" of="$target" bs=4194304
 sync
 SH
 
-PARTITION_SHA="$($ADB shell "sha256sum '$TARGET'" | awk 'NR==1 {print $1}' | tr -d '\r')"
+PARTITION_SHA="$("$ADB" shell "sha256sum '$TARGET'" | awk 'NR==1 {print $1}' | tr -d '\r')"
 "$ADB" shell "rm -f '$REMOTE_IMAGE'" >/dev/null 2>&1 || true
 if [[ "$PARTITION_SHA" != "$EXPECTED_CANDIDATE_SHA256" ]]; then
     echo "REFUSING: recovery partition hash does not match exact U0g" >&2
