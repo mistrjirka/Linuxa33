@@ -16,16 +16,34 @@ address_2_003e_owned=no
 helper_output_present=no
 ```
 
-Hook 03 expected bus 2 to resolve to `13860000.hsi2c`. It therefore exited at the adapter guard before creating `/dev/i2c-2` and before invoking the helper.
+Hook 03 expected runtime bus 2 to resolve to `13860000.hsi2c`. It therefore exited at the adapter guard before creating an I2C character node and before invoking the helper.
 
-The U0f result also shows no kernel panic and no host enumeration. It does not test whether the `0x6d/0x70` register sequence works.
+The failure was caused by unstable runtime bus numbering, not evidence against the `0x6d/0x70` sequence.
 
-## 2. Same S2MU106 family on another Samsung device
+## 2. Corrected A33 topology
+
+The full TWRP sysfs topology established:
+
+```text
+13860000.hsi2c:
+  2-003d  s2mu106mfd
+  2-003e  dummy (MUIC bank reservation)
+
+138b0000.hsi2c:
+  6-003b  s2mu106-fuelgauge
+  6-003c  s2mu106-usbpd
+```
+
+The earlier bus-6 MUIC inference was incorrect. The A33 exposes S2MU106 banks through two physical controllers. The MUIC operation belongs to physical controller `13860000.hsi2c`, address `0x3e`.
+
+In TWRP that controller is bus 2. In the minimal U0f initramfs, bus 2 was instead `13850000.hsi2c`, proving that the integer bus number is not a stable identifier across boot environments.
+
+U0g must discover the runtime adapter whose physical path contains `13860000.hsi2c` and derive its current bus number.
+
+## 3. Same S2MU106 family on another Samsung device
 
 A stock Galaxy A71 boot log with S2MU106 shows:
 
-- fuel gauge at `<bus>-003b`;
-- USB-PD at the same `<bus>-003c`;
 - MUIC USB detection calling `_s2mu106_muic_sel_path`;
 - `manual_sw_ctrl` changing from `0x00` to `0x24` when USB is detected.
 
@@ -33,29 +51,7 @@ Source:
 
 - https://gist.github.com/faizauthar12/1947b2420e0af0cb04414ad9a8f4278c
 
-This independently supports both:
-
-1. the intended manual-switch value `0x24`;
-2. treating the S2MU106 fuel-gauge, USB-PD, and MUIC banks as members of one I2C-bus topology rather than assuming bus 2 from a generic controller name.
-
-## 3. A33 recovered-kernel evidence
-
-The A33 U0f recovered log repeatedly identifies:
-
-```text
-s2mu106-fuelgauge 6-003b
-usbpd-s2mu106 6-003c
-```
-
-This is strong evidence that the relevant S2MU106 topology is on bus 6. The expected unowned MUIC bank is therefore likely `6-003e`, but that final mapping must be confirmed from TWRP sysfs before any write.
-
-The repository now includes a read-only topology probe:
-
-```text
-scripts/probe-a33-s2mu106-topology.sh
-```
-
-It enumerates every I2C adapter/client and fails closed unless the already-observed `6-003b` and `6-003c` clients exist.
+This independently supports the intended manual-switch value `0x24`. It does not justify assuming that all S2MU106 banks share one Linux bus number on the A33.
 
 ## 4. Other postmarketOS USB gadget failure classes
 
@@ -68,7 +64,7 @@ Sources:
 - https://gitlab.com/postmarketOS/pmaports/-/merge_requests/4750
 - https://gitlab.com/postmarketOS/pmaports/-/issues/2564
 
-This is not the current U0f root cause: U0f stopped before the MUIC helper. It becomes relevant after the corrected physical path succeeds.
+This becomes relevant only after U0g proves the physical MUIC operation completed.
 
 ### Cable present during boot
 
@@ -78,7 +74,7 @@ Source:
 
 - https://gitlab.com/postmarketOS/pmaports/-/issues/99
 
-A later experiment should therefore distinguish:
+A later experiment should distinguish:
 
 - boot with cable connected;
 - boot disconnected, then connect after gadget start;
@@ -92,18 +88,20 @@ Source:
 
 - https://gitlab.com/postmarketOS/pmaports/-/merge_requests/2546
 
-## 5. Decision tree
+## 5. U0g decision
 
-### U0g
+Change only adapter selection and device-path parameterization:
 
-After the read-only topology probe, change only the incorrect I2C topology assumption:
-
-- use the proven bus and adapter target;
 - preserve the U0d Type-C patch;
 - preserve original PDIC;
-- preserve the exact helper sequence and rollback;
+- preserve `i2c_dev` as the sole module delta;
+- preserve register sequence `0x6d=0x13`, `0x70=0x24`, `0x6d=0x17`;
+- preserve readback and rollback;
 - preserve metadata persistence;
-- use `/dev/i2c-<proven bus>` and `<proven bus>-003e` ownership guard.
+- find exactly one `i2c-dev` adapter backed by physical controller `13860000.hsi2c`;
+- derive its runtime bus number;
+- guard `<runtime bus>-003e` ownership;
+- invoke the helper on `/dev/i2c-<runtime bus>`.
 
 ### If U0g helper fails
 
@@ -117,7 +115,7 @@ The physical MUIC switch hypothesis is insufficient. The next experiment should 
 2. selected UDC identity;
 3. explicit disconnect/reconnect or DWC3 run-stop/pull-up cycle;
 4. boot-with-cable versus connect-after-boot;
-5. minimal ACM serial gadget versus USB networking, to separate basic enumeration from networking configuration.
+5. minimal ACM serial gadget versus USB networking.
 
 ## 6. Desktop/Wi-Fi fallback
 
@@ -125,6 +123,7 @@ A desktop environment does not by itself solve the current problem because displ
 
 Recommended priority:
 
-1. one corrected bus-6 MUIC experiment;
+1. one corrected dynamic-controller MUIC experiment;
 2. if the switch succeeds, one UDC/pull-up/ACM isolation experiment;
-3. in parallel, start a separate Wi-Fi bring-up track rather than waiting for a full desktop environment.
+3. in parallel, start a separate Wi-Fi bring-up track;
+4. introduce display/input support incrementally toward a desktop environment.
