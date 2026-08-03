@@ -11,7 +11,9 @@ ADB="${ADB:-adb}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_AUDIT="$SCRIPT_DIR/audit-a33-first-rootfs-chain.sh"
 EXECUTE_SCRIPT="$SCRIPT_DIR/execute-a33-first-rootfs-deployment.sh"
+RESCUE_VERIFY="$SCRIPT_DIR/verify-a33-twrp-rescue-assets.sh"
 BASE_REPORT="$PORT_ROOT/build/a33-first-rootfs-chain-audit.txt"
+RESCUE_REPORT="$PORT_ROOT/build/a33-twrp-rescue-assets.txt"
 FINAL_REPORT="$PORT_ROOT/build/a33-first-rootfs-chain-final-audit.txt"
 EXPECTED_USERDATA_RESOLVED="/dev/block/sda36"
 
@@ -21,7 +23,7 @@ for command in bash "$ADB" sha256sum awk date tee grep; do
         exit 1
     }
 done
-for required in "$BASE_AUDIT" "$EXECUTE_SCRIPT"; do
+for required in "$BASE_AUDIT" "$EXECUTE_SCRIPT" "$RESCUE_VERIFY"; do
     [[ -f "$required" ]] || {
         echo "Missing required script: $required" >&2
         exit 1
@@ -30,19 +32,32 @@ done
 
 bash -n "$BASE_AUDIT"
 bash -n "$EXECUTE_SCRIPT"
+bash -n "$RESCUE_VERIFY"
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -S error "$BASE_AUDIT" "$EXECUTE_SCRIPT"
+    shellcheck -S error "$BASE_AUDIT" "$EXECUTE_SCRIPT" "$RESCUE_VERIFY"
 fi
 
 bash "$BASE_AUDIT"
+bash "$RESCUE_VERIFY"
 
-value() {
+base_value() {
     local key="$1"
     awk -F= -v key="$key" '$1==key {print substr($0, length(key)+2); exit}' "$BASE_REPORT"
 }
-if [[ "$(value audit_status)" != passed || "$(value phone_writes)" != no ]]; then
+rescue_value() {
+    local key="$1"
+    awk -F= -v key="$key" '$1==key {print substr($0, length(key)+2); exit}' "$RESCUE_REPORT"
+}
+if [[ "$(base_value audit_status)" != passed || "$(base_value phone_writes)" != no ]]; then
     echo "REFUSING: base complete-chain audit did not pass" >&2
     cat "$BASE_REPORT" >&2
+    exit 1
+fi
+if [[ "$(rescue_value verification_status)" != passed || \
+      "$(rescue_value twrp_sha256)" != 414df197c21de25fc5627cd3a4d8a59011bef0141cfa479560c48aa378d3ad7e || \
+      "$(rescue_value odin_sha256)" != 6754aa54f2abe6e99ece32414cd34c8b23b28dbddde537a33203036813637c3b ]]; then
+    echo "REFUSING: exact TWRP/Odin rescue assets did not pass" >&2
+    cat "$RESCUE_REPORT" >&2
     exit 1
 fi
 
@@ -85,6 +100,11 @@ fi
     echo "base_audit_script_sha256=$(sha256sum "$BASE_AUDIT" | awk '{print $1}')"
     echo "execute_script_sha256=$(sha256sum "$EXECUTE_SCRIPT" | awk '{print $1}')"
     echo "execute_script_syntax=passed"
+    echo "rescue_verify_script_sha256=$(sha256sum "$RESCUE_VERIFY" | awk '{print $1}')"
+    echo "rescue_assets_report_sha256=$(sha256sum "$RESCUE_REPORT" | awk '{print $1}')"
+    echo "rescue_assets_status=passed"
+    echo "rescue_twrp_sha256=$(rescue_value twrp_sha256)"
+    echo "rescue_odin_sha256=$(rescue_value odin_sha256)"
     echo "proc_swaps_readable=yes"
     echo "userdata_swap_users=none"
     echo "final_phone_writes=no"
