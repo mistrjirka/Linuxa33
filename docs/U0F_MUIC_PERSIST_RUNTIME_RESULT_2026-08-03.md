@@ -9,7 +9,7 @@
 
 ## Result classification
 
-U0f is **negative for host USB enumeration**, but it conclusively explains why U0e/U0f did not test the intended MUIC register sequence: hook 03 aborted before creating the I2C character device or invoking the helper because its I2C topology assumption was wrong.
+U0f is **negative for host USB enumeration**, but it conclusively explains why U0e/U0f did not test the intended MUIC register sequence: hook 03 aborted before creating the I2C character device or invoking the helper because it treated a runtime I2C bus number as stable.
 
 This is not evidence that the register sequence itself is ineffective. The helper did not run.
 
@@ -33,7 +33,9 @@ helper_output_present=no
 helper_success_marker=no
 ```
 
-Hook 03 expected bus 2 to map to `13860000.hsi2c`. The actual bus-2 adapter was `13850000.hsi2c`. Hook 03 intentionally failed closed on this mismatch before its `mknod` and helper invocation stages. This explains all of the following together:
+Hook 03 expected runtime bus 2 to map to physical controller `13860000.hsi2c`. In the minimal initramfs, runtime bus 2 instead mapped to `13850000.hsi2c`. Hook 03 intentionally failed closed on this mismatch before its `mknod` and helper invocation stages.
+
+This explains all of the following together:
 
 - `i2c_dev` loaded;
 - `/sys/class/i2c-dev/i2c-2` appeared;
@@ -41,18 +43,30 @@ Hook 03 expected bus 2 to map to `13860000.hsi2c`. The actual bus-2 adapter was 
 - `/run/a33x-muic-switch-helper.log` did not exist;
 - no helper success or error transcript was available.
 
-## Stronger S2MU106 topology evidence
+## Corrected topology from full TWRP sysfs
 
-The recovered candidate kernel log identifies the active S2MU106 clients as:
+The read-only TWRP topology probe established:
 
 ```text
-s2mu106-fuelgauge 6-003b
-usbpd-s2mu106 6-003c
+2-003d -> /sys/devices/platform/13860000.hsi2c/i2c-2/2-003d
+name    -> s2mu106mfd
+
+2-003e -> /sys/devices/platform/13860000.hsi2c/i2c-2/2-003e
+name    -> dummy
+
+6-003b -> /sys/devices/platform/138b0000.hsi2c/i2c-6/6-003b
+name    -> s2mu106-fuelgauge
+
+6-003c -> /sys/devices/platform/138b0000.hsi2c/i2c-6/6-003c
+name    -> s2mu106-usbpd
 ```
 
-Therefore the S2MU106 device family is on I2C bus 6 in this runtime, not bus 2. The MUIC bank at address `0x3e` is expected to be a sibling on that same S2MU106 bus, pending direct TWRP sysfs confirmation.
+The earlier inference that the MUIC bank should be `6-003e` was wrong. The A33 exposes different S2MU106 banks through two physical I2C controllers:
 
-The next candidate must not simply change the bus-2 expected controller from `13860000` to `13850000`. That would preserve the more fundamental wrong-bus assumption.
+- MFD/MUIC bank: `13860000.hsi2c`, TWRP bus 2, addresses `0x3d/0x3e`;
+- fuel-gauge/USB-PD bank: `138b0000.hsi2c`, TWRP bus 6, addresses `0x3b/0x3c`.
+
+The correct invariant is therefore the **physical controller `13860000.hsi2c`**, not the integer bus number 2. Bus numbering changes when the minimal initramfs registers a different subset/order of adapters.
 
 ## USB and stability result
 
@@ -62,37 +76,26 @@ The next candidate must not simply change the bus-2 expected controller from `13
 - later Samsung USB appearances belonged to Download Mode and restored TWRP;
 - the wrapped Samsung `last_kmsg` includes mixed/stale DWC3 reset lines, while the host and persistent U0f result establish that U0f did not enumerate.
 
-## Required next step
+## Required U0g correction
 
-Run the read-only TWRP topology probe:
+U0g must change only I2C adapter selection:
 
-```sh
-bash scripts/probe-a33-s2mu106-topology.sh
-```
+1. load `i2c_dev` as before;
+2. enumerate `/sys/class/i2c-dev/i2c-*` after registration;
+3. select exactly one adapter whose resolved physical path contains `13860000.hsi2c`;
+4. derive the runtime bus number from that selected adapter;
+5. create `/dev/i2c-<runtime bus>` from its sysfs major/minor;
+6. refuse if `<runtime bus>-003e` is owned;
+7. run the unchanged `0x6d/0x70` sequence against the dynamically selected device;
+8. persist the exact transcript to metadata.
 
-It must establish:
-
-1. the controller behind I2C bus 6;
-2. the exact clients at `6-003b`, `6-003c`, `6-003d`, and `6-003e`;
-3. the client names and bound drivers;
-4. whether `6-003e` is the S2MU106 MUIC client under the full TWRP stack.
-
-Only then build U0g. U0g should be an actual functional correction, not another observability-only experiment:
-
-- retain the safe U0d Type-C path;
-- retain `i2c_dev` and metadata persistence;
-- discover or verify the S2MU106 bus using the known USB-PD sibling at address `0x3c`;
-- target the MUIC sibling at address `0x3e` on the same bus;
-- create the correct `/dev/i2c-N` node;
-- run and persist the exact register transcript;
-- keep the full MUIC/CPIF/BTS soft-dependency closure absent.
+The U0d Type-C patch, original PDIC module, module set, register values, readback, rollback, and metadata channel remain unchanged.
 
 ## Broader bring-up direction
 
-USB remains desirable, but it is not the only management path. After the corrected U0g attempt, work should branch in parallel:
+After U0g:
 
-1. USB-C debug transport and physical enumeration;
-2. safe headless Wi-Fi plus SSH as an alternate management path;
-3. incremental display/input bring-up toward a desktop environment.
-
-A desktop environment cannot yet be treated as the immediate shortcut because the display/MIPI stack previously caused a confirmed kernel panic when loaded indiscriminately. Display modules must be introduced incrementally with the same fail-closed approach.
+1. if the helper fails, fix the exact persistent I2C error;
+2. if the helper succeeds but USB still fails, isolate UDC selection, pull-up/run-stop, cable reconnect behavior, and a minimal ACM serial gadget;
+3. continue a parallel headless Wi-Fi/SSH track;
+4. introduce display/input modules incrementally toward a desktop environment rather than loading the prior crashing display/MIPI closure indiscriminately.
