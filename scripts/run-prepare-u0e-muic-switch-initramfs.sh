@@ -10,6 +10,7 @@ ROOTFS="${ROOTFS:-$PMBOOTSTRAP_WORK/chroot_rootfs_samsung-a33x}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE="$SCRIPT_DIR/prepare-u0e-muic-switch-initramfs.sh"
 RUNTIME="$SCRIPT_DIR/.prepare-u0e-muic-switch-initramfs.runtime.$$"
+STATE_FILE="$PORT_ROOT/build/third-host-pmbootstrap-state.txt"
 
 BASE_HOOK_PACKAGES="postmarketos-mkinitfs-hook-a33x-watchdog,postmarketos-mkinitfs-hook-a33x-usbpd,postmarketos-mkinitfs-hook-debug-shell"
 
@@ -33,6 +34,11 @@ cleanup() {
     rm -f "$RUNTIME"
 }
 trap cleanup EXIT
+
+if [[ -f "$STATE_FILE" ]]; then
+    mv -f "$STATE_FILE" "$STATE_FILE.invalid"
+    echo "Quarantined unverified state marker: $STATE_FILE.invalid"
+fi
 
 echo "=== Install and verify U0d base initramfs hooks ==="
 pmbootstrap chroot -r --add "$BASE_HOOK_PACKAGES" -- true
@@ -69,10 +75,5 @@ if count != 1:
 runtime.write_text(text.replace(old, new))
 runtime.chmod(0o755)
 PY
-
-# Remove only the stale marker written by a manually continued, unverified
-# third-host attempt. Successful preparation below recreates trustworthy state
-# through its own reports and manifests.
-rm -f "$PORT_ROOT/build/third-host-pmbootstrap-state.txt.invalid" 2>/dev/null || true
 
 bash "$RUNTIME" "$@"
