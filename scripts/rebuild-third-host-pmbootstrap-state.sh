@@ -94,10 +94,8 @@ if [[ ! -d "$ROOTFS" ]]; then
 fi
 
 echo "=== Install watchdog, USB-PD and debug-shell initramfs hooks ==="
-pmbootstrap chroot -r -- apk add --upgrade \
-    postmarketos-mkinitfs-hook-a33x-watchdog \
-    postmarketos-mkinitfs-hook-a33x-usbpd \
-    postmarketos-mkinitfs-hook-debug-shell
+HOOK_PACKAGES="postmarketos-mkinitfs-hook-a33x-watchdog,postmarketos-mkinitfs-hook-a33x-usbpd,postmarketos-mkinitfs-hook-debug-shell"
+pmbootstrap chroot -r --add "$HOOK_PACKAGES" -- true
 
 for required in \
     "$ROOTFS/usr/share/mkinitfs/hooks/01-a33x-watchdog.sh" \
