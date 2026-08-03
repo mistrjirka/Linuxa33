@@ -14,7 +14,7 @@ UNPACK="${UNPACK:-$PORT_ROOT/aosp-mkbootimg/unpack_bootimg.py}"
 REPORT="$PORT_ROOT/build/a33-u0g-unified-root-handoff.txt"
 DETAILS="$PORT_ROOT/build/a33-u0g-unified-root-handoff-details.txt"
 
-for command in python3 sha256sum gzip cpio grep awk find file stat; do
+for command in python3 sha256sum gzip cpio grep awk find file stat mktemp rm mkdir date tee; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required command: $command" >&2
         exit 1
@@ -76,6 +76,7 @@ gzip -dc "$RAMDISK" > "$TMP/initramfs.cpio"
 
 for required in \
     "$EXTRACTED/init" \
+    "$EXTRACTED/init_functions.sh" \
     "$EXTRACTED/init_2nd.sh" \
     "$EXTRACTED/init_functions_2nd.sh"; do
     [[ -f "$required" ]] || {
@@ -93,6 +94,7 @@ fi
 FLOW_RESULT="$(
     python3 - \
         "$EXTRACTED/init" \
+        "$EXTRACTED/init_functions.sh" \
         "$EXTRACTED/init_2nd.sh" \
         "$EXTRACTED/init_functions_2nd.sh" <<'PY'
 from pathlib import Path
@@ -100,82 +102,123 @@ import re
 import sys
 
 init_path = Path(sys.argv[1])
-init2_path = Path(sys.argv[2])
-functions2_path = Path(sys.argv[3])
+functions_path = Path(sys.argv[2])
+init2_path = Path(sys.argv[3])
+functions2_path = Path(sys.argv[4])
 
 init_lines = init_path.read_text(errors="replace").splitlines()
+functions_lines = functions_path.read_text(errors="replace").splitlines()
+functions = "\n".join(functions_lines)
 init2 = init2_path.read_text(errors="replace")
 functions2 = functions2_path.read_text(errors="replace")
 
-invoke_re = re.compile(
+source_re = re.compile(
     r"(?:^|[;&|()]|\bthen\b|\bdo\b)\s*"
-    r"(?:exec\s+)?(?:busybox\s+)?"
-    r"(?:(?:/bin/)?sh\s+|(?:source|\.)\s+)?"
-    r"[\"']?/?init_2nd\.sh[\"']?(?=$|[\s;&|)])"
+    r"(?:\.|source)\s+[\"']?(?:\./|/)?init_functions\.sh[\"']?"
+    r"(?=$|[\s;&|)])"
 )
-extra_definition_re = re.compile(
-    r"^\s*(?:function\s+)?extract_initramfs_extra\s*\(\s*\)"
+jump_call_re = re.compile(
+    r"(?:^|[;&|()]|\bthen\b|\bdo\b)\s*jump_init_2nd"
+    r"(?=$|[\s;&|)])"
 )
-reference_test_re = re.compile(
-    r"(?:^|[;&|()]|\bthen\b)\s*(?:test\s+|\[\s*)-[a-zA-Z]+\s+"
-    r"[\"']?/?init_2nd\.sh"
+extra_call_re = re.compile(
+    r"(?:^|[;&|()]|\bthen\b|\bdo\b)\s*extract_initramfs_extra"
+    r"(?=$|[\s;&|)])"
 )
 
-invocations = []
-extra_calls = []
-raw_references = []
-for lineno, raw in enumerate(init_lines, 1):
-    stripped = raw.strip()
-    if not stripped or stripped.startswith("#"):
-        continue
-    if "init_2nd.sh" in stripped:
-        raw_references.append((lineno, stripped))
-    if invoke_re.search(stripped) and not reference_test_re.search(stripped):
-        invocations.append((lineno, stripped))
-    if (
-        "extract_initramfs_extra" in stripped
-        and not extra_definition_re.search(stripped)
-        and not stripped.startswith("#")
-    ):
-        extra_calls.append((lineno, stripped))
 
-if not invocations:
+def executable_lines(lines: list[str], pattern: re.Pattern[str]) -> list[tuple[int, str]]:
+    matches: list[tuple[int, str]] = []
+    for lineno, raw in enumerate(lines, 1):
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if pattern.search(stripped):
+            matches.append((lineno, stripped))
+    return matches
+
+
+source_calls = executable_lines(init_lines, source_re)
+jump_calls = executable_lines(init_lines, jump_call_re)
+extra_calls = executable_lines(init_lines, extra_call_re)
+
+if not source_calls:
+    raise SystemExit("REFUSING: /init never sources /init_functions.sh")
+if not jump_calls:
+    raise SystemExit("REFUSING: /init never calls jump_init_2nd")
+
+source_line, source_text = source_calls[0]
+jump_line, jump_text = jump_calls[0]
+if source_line > jump_line:
+    raise SystemExit("REFUSING: /init calls jump_init_2nd before sourcing init_functions.sh")
+if extra_calls and jump_line > extra_calls[0][0]:
     raise SystemExit(
-        "REFUSING: /init contains no executable invocation of /init_2nd.sh; "
-        f"raw references={raw_references}"
+        "REFUSING: first jump_init_2nd call occurs after extract_initramfs_extra"
     )
 
-invocation_line, invocation_text = invocations[0]
-if extra_calls and invocation_line > extra_calls[0][0]:
-    raise SystemExit(
-        "REFUSING: first /init_2nd.sh invocation occurs after "
-        "extract_initramfs_extra"
-    )
+function_match = re.search(
+    r"(?ms)^\s*jump_init_2nd\s*\(\s*\)\s*\{\s*\n"
+    r"(?P<body>.*?)^\s*\}",
+    functions,
+)
+if function_match is None:
+    raise SystemExit("REFUSING: init_functions.sh lacks jump_init_2nd()")
 
-for token in ("wait_root_partition", "mount_root_partition", "switch_root"):
+function_body = function_match.group("body")
+function_body_line = functions[: function_match.start("body")].count("\n") + 1
+existence_guard_re = re.compile(
+    r"(?:test\s+-e|\[\s+-e)\s+[\"']?/init_2nd\.sh[\"']?"
+)
+exec_re = re.compile(
+    r"(?m)^\s*exec\s+(?:(?:/bin/)?sh\s+)?"
+    r"[\"']?/init_2nd\.sh[\"']?\s*$"
+)
+if existence_guard_re.search(function_body) is None:
+    raise SystemExit("REFUSING: jump_init_2nd lacks an /init_2nd.sh existence guard")
+if "return" not in function_body:
+    raise SystemExit("REFUSING: jump_init_2nd does not return when second stage is absent")
+exec_match = exec_re.search(function_body)
+if exec_match is None:
+    raise SystemExit("REFUSING: jump_init_2nd does not exec /init_2nd.sh")
+exec_line = function_body_line + function_body[: exec_match.start()].count("\n")
+
+for token in (
+    "wait_root_partition",
+    "resize_root_partition",
+    "resize_root_filesystem",
+    "mount_root_partition",
+    "switch_root",
+):
     if token not in init2:
         raise SystemExit(f"REFUSING: /init_2nd.sh lacks {token}")
 
-combined_second_stage = init2 + "\n" + functions2
-if "pmOS_root" not in combined_second_stage:
-    raise SystemExit("REFUSING: second-stage initramfs lacks pmOS_root discovery")
+if "find_root_partition" not in functions or "pmOS_root" not in functions:
+    raise SystemExit("REFUSING: init_functions.sh lacks pmOS_root discovery")
+if "resize2fs" not in functions2:
+    raise SystemExit("REFUSING: second-stage functions lack ext4 resize2fs support")
+if "check_filesystem" not in functions2:
+    raise SystemExit("REFUSING: second-stage functions lack filesystem checking")
 
-resize_present = "resize2fs" in combined_second_stage
-fsck_present = any(token in combined_second_stage for token in ("e2fsck", "fsck.ext4", "fsck"))
 extra_line = extra_calls[0][0] if extra_calls else 0
 extra_text = extra_calls[0][1] if extra_calls else "none"
 
-print(f"init_2nd_invocation_line={invocation_line}")
-print(f"init_2nd_invocation_text={invocation_text}")
+print(f"init_functions_source_line={source_line}")
+print(f"init_functions_source_text={source_text}")
+print(f"jump_init_2nd_call_line={jump_line}")
+print(f"jump_init_2nd_call_text={jump_text}")
 print(f"extract_extra_call_line={extra_line}")
 print(f"extract_extra_call_text={extra_text}")
+print(f"jump_init_2nd_exec_line={exec_line}")
+print("jump_init_2nd_guard=yes")
+print("jump_init_2nd_exec=yes")
 print("init_2nd_invocation_before_extra=yes")
 print("second_stage_root_wait=yes")
+print("second_stage_root_resize=yes")
 print("second_stage_root_mount=yes")
 print("second_stage_switch_root=yes")
 print("pmos_root_discovery=yes")
-print(f"root_resize_present={'yes' if resize_present else 'no'}")
-print(f"root_fsck_present={'yes' if fsck_present else 'no'}")
+print("root_resize_present=yes")
+print("root_fsck_present=yes")
 PY
 )"
 
@@ -236,16 +279,20 @@ flow_value() {
     echo "ramdisk_sha256=$RAMDISK_SHA"
     echo "init_2nd_embedded=yes"
     echo "init_2nd_executable=yes"
-    echo "init_2nd_invocation_line=$(flow_value init_2nd_invocation_line)"
+    echo "init_functions_source_line=$(flow_value init_functions_source_line)"
+    echo "jump_init_2nd_call_line=$(flow_value jump_init_2nd_call_line)"
+    echo "jump_init_2nd_exec_line=$(flow_value jump_init_2nd_exec_line)"
+    echo "jump_init_2nd_guard=$(flow_value jump_init_2nd_guard)"
+    echo "jump_init_2nd_exec=$(flow_value jump_init_2nd_exec)"
     echo "init_2nd_invocation_before_extra=$(flow_value init_2nd_invocation_before_extra)"
     echo "deviceinfo_create_initfs_extra=$CREATE_EXTRA"
     echo "embedded_initramfs_extra=$INIT_EXTRA_PRESENT"
     echo "pmos_boot_required_before_second_stage=no"
     echo "pmos_root_discovery=$(flow_value pmos_root_discovery)"
     echo "root_wait_present=$(flow_value second_stage_root_wait)"
+    echo "root_resize_present=$(flow_value root_resize_present)"
     echo "root_mount_present=$(flow_value second_stage_root_mount)"
     echo "switch_root_present=$(flow_value second_stage_switch_root)"
-    echo "root_resize_present=$(flow_value root_resize_present)"
     echo "root_fsck_present=$(flow_value root_fsck_present)"
     echo "cache_partition_required=no"
     echo "verification_status=passed"
