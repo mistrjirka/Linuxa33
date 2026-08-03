@@ -46,3 +46,9 @@ phy-exynos-usbdrd-super
 usb_notify_layer
 usb_notifier
 dwc3-exynos-usb
+
+# The vendor USB-PD driver has no usable OF modalias and declares a softdep on
+# the unsafe full MUIC closure. Keep it in the selected module set, but activate
+# it only through the explicit hard-dependency loader hook. Its hard dependency
+# adds the PDIC notifier module, producing the proven 66-module U0b/U0d set.
+s2mu106_usbpd
