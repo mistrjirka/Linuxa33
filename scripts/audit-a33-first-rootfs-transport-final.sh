@@ -10,6 +10,8 @@ PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+COMMAND_AUDIT="$SCRIPT_DIR/audit-a33-command-capabilities.sh"
+COMMAND_REPORT="$PORT_ROOT/build/a33-command-capabilities.txt"
 FINAL_CHAIN_AUDIT="$SCRIPT_DIR/audit-a33-first-rootfs-chain-final.sh"
 FINAL_CHAIN_REPORT="$PORT_ROOT/build/a33-first-rootfs-chain-final-audit.txt"
 STAGE_SCRIPT="$SCRIPT_DIR/stage-a33-userdata-rootfs-in-twrp.sh"
@@ -17,13 +19,15 @@ STAGE_REPORT="$PORT_ROOT/build/a33-userdata-rootfs-stage.txt"
 REPORT="$PORT_ROOT/build/a33-first-rootfs-transport-final-audit.txt"
 DETAILS="$PORT_ROOT/build/a33-first-rootfs-transport-final-audit-details.txt"
 
-for command in bash sha256sum awk grep date tee python3 ssh timeout mktemp readlink; do
+for command in \
+    bash sha256sum awk grep date tee python3 ssh timeout mktemp readlink \
+    seq sleep cat rm git; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required command: $command" >&2
         exit 1
     }
 done
-for required in "$SELF" "$FINAL_CHAIN_AUDIT" "$STAGE_SCRIPT"; do
+for required in "$SELF" "$COMMAND_AUDIT" "$FINAL_CHAIN_AUDIT" "$STAGE_SCRIPT"; do
     [[ -f "$required" ]] || {
         echo "Missing required script: $required" >&2
         exit 1
@@ -34,6 +38,7 @@ mkdir -p "$PORT_ROOT/build"
 : > "$DETAILS"
 
 SCRIPTS=(
+    audit-a33-command-capabilities.sh
     stage-a33-userdata-rootfs-in-twrp.sh
     deploy-a33-rootfs-to-userdata.sh
     execute-a33-first-rootfs-deployment.sh
@@ -60,14 +65,34 @@ else
     echo "shellcheck=not-installed-syntax-and-contract-checks-used" >> "$DETAILS"
 fi
 
-# Re-run every existing non-destructive chain and rescue gate against the
-# changed deployment script before testing transport.
-bash "$FINAL_CHAIN_AUDIT" | tee -a "$DETAILS"
+# Prove every host, ADB, TWRP and rootfs command used later before any image is
+# staged and before any persistent partition can be written.
+bash "$COMMAND_AUDIT" | tee -a "$DETAILS"
 
 value() {
     local file="$1" key="$2"
     awk -F= -v key="$key" '$1==key {print substr($0, length(key)+2); exit}' "$file"
 }
+
+if [[ "$(value "$COMMAND_REPORT" command_capability_audit_status)" != passed || \
+      "$(value "$COMMAND_REPORT" host_required_commands_status)" != passed || \
+      "$(value "$COMMAND_REPORT" adb_shell_probe)" != passed || \
+      "$(value "$COMMAND_REPORT" adb_push_binary_probe)" != passed || \
+      "$(value "$COMMAND_REPORT" adb_exec_out_binary_probe)" != passed || \
+      "$(value "$COMMAND_REPORT" adb_exec_in_used)" != no || \
+      "$(value "$COMMAND_REPORT" adb_help_feature_detection_used)" != no || \
+      "$(value "$COMMAND_REPORT" twrp_required_commands_status)" != passed || \
+      "$(value "$COMMAND_REPORT" twrp_command_option_probes)" != passed || \
+      "$(value "$COMMAND_REPORT" rootfs_required_runtime_commands)" != passed || \
+      "$(value "$COMMAND_REPORT" persistent_phone_partition_writes)" != no ]]; then
+    echo "REFUSING: command capability audit did not pass" >&2
+    cat "$COMMAND_REPORT" >&2
+    exit 1
+fi
+
+# Re-run every existing non-destructive chain and rescue gate against the
+# changed deployment and execution scripts.
+bash "$FINAL_CHAIN_AUDIT" | tee -a "$DETAILS"
 
 if [[ "$(value "$FINAL_CHAIN_REPORT" final_audit_status)" != passed || \
       "$(value "$FINAL_CHAIN_REPORT" audit_status)" != passed || \
@@ -79,26 +104,21 @@ if [[ "$(value "$FINAL_CHAIN_REPORT" final_audit_status)" != passed || \
     exit 1
 fi
 
-# Prove Python socket support used as a portable fallback/debug tool.
 python3 - <<'PY'
 import socket
 assert socket.AF_INET
 print("python_socket_support=passed")
 PY
-
 echo "python_socket_support=passed" >> "$DETAILS"
 
-# Prove the OpenSSH client accepts the exact host-key option used by the live
-# collector without opening a network connection.
 ssh -G \
     -o StrictHostKeyChecking=accept-new \
     -o UserKnownHostsFile=/dev/null \
     127.0.0.1 >/dev/null
-
 echo "ssh_strict_host_key_accept_new=passed" >> "$DETAILS"
 
 # The current observer uses Bash /dev/tcp. Test it against a temporary local
-# listener so support is proved, not inferred from `bash --help` text.
+# listener rather than assuming this optional Bash feature exists.
 TCP_DIR="$(mktemp -d)"
 TCP_PORT_FILE="$TCP_DIR/port"
 cleanup_tcp() {
@@ -143,9 +163,8 @@ wait "$TCP_SERVER_PID"
 TCP_SERVER_PID=""
 echo "bash_dev_tcp_support=passed" >> "$DETAILS"
 
-# Prove the exact ADB/TWRP pair can transfer the complete 765 MiB image in both
-# directions without exec-in. The staged file remains in volatile /tmp for the
-# subsequently gated deployment.
+# Prove the exact ADB/TWRP pair can transfer the complete image in both
+# directions without exec-in. The staged file remains in volatile /tmp.
 bash "$STAGE_SCRIPT" | tee -a "$DETAILS"
 
 if [[ "$(value "$STAGE_REPORT" staging_status)" != passed || \
@@ -160,6 +179,7 @@ if [[ "$(value "$STAGE_REPORT" staging_status)" != passed || \
     exit 1
 fi
 
+COMMAND_REPORT_SHA="$(sha256sum "$COMMAND_REPORT" | awk '{print $1}')"
 FINAL_CHAIN_SHA="$(sha256sum "$FINAL_CHAIN_REPORT" | awk '{print $1}')"
 STAGE_REPORT_SHA="$(sha256sum "$STAGE_REPORT" | awk '{print $1}')"
 IMAGE_SHA="$(value "$STAGE_REPORT" source_sha256)"
@@ -170,6 +190,12 @@ IMAGE_SIZE="$(value "$STAGE_REPORT" source_size)"
     echo "operation=audit-a33-first-rootfs-real-transport"
     echo "repo_commit=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
     echo "transport_audit_script_sha256=$(sha256sum "$SELF" | awk '{print $1}')"
+    echo "command_audit_script_sha256=$(sha256sum "$COMMAND_AUDIT" | awk '{print $1}')"
+    echo "command_capability_report_sha256=$COMMAND_REPORT_SHA"
+    echo "command_capability_audit_status=passed"
+    echo "allowed_adb_subcommands=$(value "$COMMAND_REPORT" adb_allowed_subcommands)"
+    echo "actual_adb_subcommands=$(value "$COMMAND_REPORT" adb_actual_subcommands)"
+    echo "twrp_required_commands_status=passed"
     echo "final_chain_audit_script_sha256=$(sha256sum "$FINAL_CHAIN_AUDIT" | awk '{print $1}')"
     echo "final_chain_audit_report_sha256=$FINAL_CHAIN_SHA"
     echo "final_chain_audit_status=passed"
