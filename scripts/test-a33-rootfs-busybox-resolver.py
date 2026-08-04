@@ -4,7 +4,12 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 
-from lib.a33_rootfs_busybox import BusyBoxResolutionError, resolve_verified_busyboxes
+from lib.a33_rootfs_busybox import (
+    BusyBoxResolutionError,
+    RUNTIME_DIR,
+    build_runtime_upload_plan,
+    resolve_verified_busyboxes,
+)
 
 
 class Entry:
@@ -63,6 +68,34 @@ with tempfile.TemporaryDirectory() as temp:
     assert binaries["busybox"].read_bytes() == busybox
     assert any("source=cpio:" in line for line in evidence)
 
+    find_root = root / "find_root_partition.sh"
+    runtime_test = root / "runtime-test.sh"
+    find_root.write_text("find_root_partition() { :; }\n", encoding="utf-8")
+    runtime_test.write_text("exit 0\n", encoding="utf-8")
+    plan = build_runtime_upload_plan(
+        binaries=binaries,
+        find_root_script=find_root,
+        runtime_test_script=runtime_test,
+    )
+    assert [remote for _, remote in plan] == [
+        f"{RUNTIME_DIR}/busybox",
+        f"{RUNTIME_DIR}/busybox-extras",
+        f"{RUNTIME_DIR}/find_root_partition.sh",
+        f"{RUNTIME_DIR}/runtime-test.sh",
+    ]
+    assert all(local.is_file() and local.stat().st_size > 0 for local, _ in plan)
+
+    try:
+        build_runtime_upload_plan(
+            binaries={"busybox": binaries["busybox"]},
+            find_root_script=find_root,
+            runtime_test_script=runtime_test,
+        )
+    except BusyBoxResolutionError:
+        pass
+    else:
+        raise AssertionError("missing BusyBox runtime upload was accepted")
+
     bad_report = dict(report)
     bad_report["busybox_binary_sha256"] = "0" * 64
     try:
@@ -81,4 +114,6 @@ with tempfile.TemporaryDirectory() as temp:
 print("busybox_resolver_self_test=passed")
 print("cpio_basename_discovery=passed")
 print("u0h_hash_bound_rootfs_fallback=passed")
+print("runtime_upload_plan=passed")
+print("missing_runtime_upload_refusal=passed")
 print("mismatching_hash_refusal=passed")
