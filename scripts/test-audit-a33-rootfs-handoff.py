@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import sys
 import tarfile
@@ -24,8 +25,8 @@ with tempfile.TemporaryDirectory() as temp:
     newer = build / "u0j-nondestructive-audit-20260804-130000"
     older.mkdir()
     newer.mkdir()
-    older.touch()
-    newer.touch()
+    os.utime(older, (1000, 1000))
+    os.utime(newer, (2000, 2000))
     assert module.choose_audit_dir(root, None, True) == newer
 
     original = newer / "original.bin"
