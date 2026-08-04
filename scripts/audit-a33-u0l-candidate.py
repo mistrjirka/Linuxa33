@@ -5,7 +5,6 @@ import argparse
 import gzip
 import importlib.util
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,6 +15,7 @@ U0K_FLASH = HERE / "flash-a33-u0k-direct-mount-isolation.py"
 EXPECTED_U0L_BUILDER_BLOB = "c976721153b43e4507478597bb6680972b4cc8dc"
 EXPECTED_U0K_FLASH_BLOB = "404308fa0e439ea00224ef6f58647fc3cca63778"
 COMPONENTS_UNCHANGED = ("kernel", "dtb", "recovery_dtbo")
+IGNORED_BOOT_INFO_PREFIXES = ("ramdisk size:", "ramdisk_size:")
 
 
 def load(name: str, path: Path):
@@ -41,7 +41,19 @@ def fail(message: str) -> None:
     raise AuditError(message)
 
 
+def normalize_boot_info(text: str) -> str:
+    lines: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        lowered = line.lower()
+        if any(lowered.startswith(prefix) for prefix in IGNORED_BOOT_INFO_PREFIXES):
+            continue
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
 def unpack_recovery(unpacker: Path, image: Path, output: Path) -> dict[str, Path]:
+    output.mkdir(parents=True, exist_ok=False)
     completed = subprocess.run(
         [sys.executable, str(unpacker), "--boot_img", str(image), "--out", str(output)],
         text=True,
@@ -205,8 +217,10 @@ def main() -> int:
     for path in (u0k_info, u0l_info, avb_verify, avb_info):
         if not path.is_file() or not path.read_bytes():
             fail(f"missing generated recovery evidence: {path}")
-    if u0k_info.read_bytes() != u0l_info.read_bytes():
-        fail("U0l boot header/command-line information differs from U0k")
+    u0k_normalized_info = normalize_boot_info(u0k_info.read_text(errors="strict"))
+    u0l_normalized_info = normalize_boot_info(u0l_info.read_text(errors="strict"))
+    if u0k_normalized_info != u0l_normalized_info:
+        fail("U0l boot header/command-line information differs from U0k beyond ramdisk size")
 
     report = root / "build/a33-u0l-candidate-audit.txt"
     pairs: list[tuple[str, object]] = [
@@ -222,13 +236,14 @@ def main() -> int:
         ("initramfs_payload_delta", "init_2nd.sh-only"),
         ("recovery_component_delta", "ramdisk-and-avb-authentication-only"),
         *[(key, value) for key, value in sorted(component_hashes.items())],
-        ("final_boot_info_sha256", v2.sha_file(u0l_info)),
+        ("normalized_boot_info_sha256", v2.sha_bytes(u0l_normalized_info.encode())),
         ("avb_verify_sha256", v2.sha_file(avb_verify)),
         ("avb_info_sha256", v2.sha_file(avb_info)),
         ("kernel_unchanged", "yes"),
         ("dtb_unchanged", "yes"),
         ("recovery_dtbo_unchanged", "yes"),
         ("kernel_cmdline_unchanged", "yes"),
+        ("boot_header_unchanged_except_ramdisk_size", "yes"),
         ("recovery_size_exact", "yes"),
         ("rootfs_persistent_delta", "none"),
         ("phone_partition_writes", "no"),
