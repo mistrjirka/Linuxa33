@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -15,7 +16,11 @@ from typing import Iterable
 
 KNOWN_TWRP_SHA256 = "414df197c21de25fc5627cd3a4d8a59011bef0141cfa479560c48aa378d3ad7e"
 KNOWN_TWRP_SIZE = 100663296
-EXPECTED_KERNEL_RELEASE = "5.10.66-Gabriel260BR-TWRP-ga0103aac9499"
+PACKAGE_KREL = "5.10.66-Gabriel260BR-TWRP-ga0103aac9499"
+EXPECTED_MODULE_VERMAGIC = (
+    "5.10.66-android12-9-24537318-abA336BXXU2AVG2 "
+    "SMP preempt mod_unload modversions aarch64"
+)
 EXPECTED_ORIGINAL_MODULES = 315
 EXPECTED_U0K_RECOVERY_SHA256 = "7696262e0ee8d3c2a31e55045e59a2b36b8f7eefb0891d56a049a415a8be0b2f"
 SOURCE_LOCK_REQUIRED = (
@@ -147,7 +152,7 @@ def audit_u0k_artifacts(checks: list[Check], root: Path, repo: Path) -> bool:
     try:
         module = load_module("a33_repro_u0k_flash", wrapper)
         local = module.validate_local(root, repo)
-    except Exception as exc:  # fail closed while preserving the exact reason
+    except Exception as exc:
         record(checks, "u0k_local_validation", "failed", f"{type(exc).__name__}: {exc}")
         return False
 
@@ -253,20 +258,41 @@ def audit_prebuilt_kernel(
         temporary.cleanup()  # type: ignore[union-attr]
 
 
-def module_vermagic_matches(path: Path) -> bool:
-    """Validate the actual module ABI without assuming a directory layout."""
+def modinfo_field(path: Path, field: str) -> str:
+    executable = shutil.which("modinfo")
+    if executable is None:
+        raise AuditError("modinfo is unavailable; install kmod")
+    completed = subprocess.run(
+        [executable, "-F", field, str(path)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AuditError(
+            f"modinfo -F {field} failed for {path}: {completed.stderr.strip()}"
+        )
+    value = completed.stdout.strip()
+    if not value:
+        raise AuditError(f"modinfo -F {field} returned empty output for {path}")
+    return value
 
-    needle = ("vermagic=" + EXPECTED_KERNEL_RELEASE).encode("ascii")
-    with path.open("rb") as stream:
-        remainder = b""
-        while True:
-            chunk = stream.read(1024 * 1024)
-            if not chunk:
-                return needle in remainder
-            data = remainder + chunk
-            if needle in data:
-                return True
-            remainder = data[-len(needle) :]
+
+def unique_module_vermagic(modules: Iterable[Path]) -> str:
+    by_vermagic: dict[str, list[Path]] = {}
+    for path in modules:
+        value = modinfo_field(path, "vermagic")
+        by_vermagic.setdefault(value, []).append(path)
+    if not by_vermagic:
+        raise AuditError("no modules were supplied for vermagic validation")
+    if len(by_vermagic) != 1:
+        summary = "; ".join(
+            f"{vermagic!r}:{len(paths)}:{paths[0]}"
+            for vermagic, paths in sorted(by_vermagic.items())
+        )
+        raise AuditError(f"multiple module vermagic values: {summary}")
+    return next(iter(by_vermagic))
 
 
 def audit_modules(
@@ -277,13 +303,13 @@ def audit_modules(
         record(checks, "original_module_tree", "missing", str(module_root))
         return False
 
-    nested = module_root / EXPECTED_KERNEL_RELEASE
+    nested = module_root / PACKAGE_KREL
     if nested.is_dir():
         release_root = nested
-        layout = "nested-release-directory"
+        layout = "nested-package-directory"
     else:
         release_root = module_root
-        layout = "flat-release-root"
+        layout = "flat-package-root"
 
     modules = sorted(release_root.rglob("*.ko"))
     manifest_hash = tree_sha256(release_root, modules) if modules else "none"
@@ -292,8 +318,8 @@ def audit_modules(
             checks,
             "original_module_tree",
             "failed",
-            f"layout={layout} module_count={len(modules)} expected={EXPECTED_ORIGINAL_MODULES} "
-            f"tree_sha256={manifest_hash}",
+            f"layout={layout} package_krel={PACKAGE_KREL} module_count={len(modules)} "
+            f"expected={EXPECTED_ORIGINAL_MODULES} tree_sha256={manifest_hash}",
         )
         return False
 
@@ -303,19 +329,29 @@ def audit_modules(
             checks,
             "original_module_tree",
             "failed",
-            f"layout={layout} missing={load_file} module_count={len(modules)}",
+            f"layout={layout} package_krel={PACKAGE_KREL} missing={load_file} "
+            f"module_count={len(modules)}",
         )
         return False
 
-    bad_vermagic = [path for path in modules if not module_vermagic_matches(path)]
-    if bad_vermagic:
-        sample = ",".join(path.relative_to(release_root).as_posix() for path in bad_vermagic[:5])
+    try:
+        actual_vermagic = unique_module_vermagic(modules)
+    except AuditError as exc:
         record(
             checks,
             "original_module_tree",
             "failed",
-            f"layout={layout} vermagic_mismatch_count={len(bad_vermagic)} sample={sample} "
-            f"expected={EXPECTED_KERNEL_RELEASE}",
+            f"layout={layout} package_krel={PACKAGE_KREL} vermagic_error={exc}",
+        )
+        return False
+    if actual_vermagic != EXPECTED_MODULE_VERMAGIC:
+        record(
+            checks,
+            "original_module_tree",
+            "failed",
+            f"layout={layout} package_krel={PACKAGE_KREL} "
+            f"module_vermagic={actual_vermagic!r} "
+            f"expected_module_vermagic={EXPECTED_MODULE_VERMAGIC!r}",
         )
         return False
 
@@ -343,8 +379,8 @@ def audit_modules(
         checks,
         "original_module_tree",
         "passed",
-        f"layout={layout} module_count={len(modules)} release={EXPECTED_KERNEL_RELEASE} "
-        f"vermagic_all=passed tree_sha256={manifest_hash}",
+        f"layout={layout} package_krel={PACKAGE_KREL} module_count={len(modules)} "
+        f"module_vermagic={actual_vermagic!r} tree_sha256={manifest_hash}",
     )
     return True
 

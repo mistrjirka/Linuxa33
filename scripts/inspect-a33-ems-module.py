@@ -4,9 +4,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
-import importlib.util
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -16,7 +14,11 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lib"))
 from a33_cpio import Archive, CpioError
 
-KERNEL_RELEASE = "5.10.66-Gabriel260BR-TWRP-ga0103aac9499"
+PACKAGE_KREL = "5.10.66-Gabriel260BR-TWRP-ga0103aac9499"
+EXPECTED_MODULE_VERMAGIC = (
+    "5.10.66-android12-9-24537318-abA336BXXU2AVG2 "
+    "SMP preempt mod_unload modversions aarch64"
+)
 TARGET_NAME = "ems"
 
 
@@ -152,7 +154,10 @@ def modinfo(path: Path, field: str) -> str:
         raise InspectionError(
             f"modinfo -F {field} failed for {path}: {completed.stderr.strip()}"
         )
-    return completed.stdout.strip()
+    value = completed.stdout.strip()
+    if not value:
+        raise InspectionError(f"modinfo -F {field} returned empty output for {path}")
+    return value
 
 
 def resolve_aports(explicit: Path | None) -> Path | None:
@@ -201,6 +206,77 @@ def format_path(path: Iterable[str]) -> str:
     return " -> ".join(normalize_module(item) for item in path)
 
 
+def classify_omission(
+    *,
+    target_selected: bool,
+    target_seeded: bool,
+    selected_dependents: Iterable[str],
+    initramfs_target_entries: Iterable[str],
+) -> tuple[str, str]:
+    dependents = tuple(selected_dependents)
+    embedded = tuple(initramfs_target_entries)
+    if dependents:
+        return (
+            "no-independent-omission",
+            "remove-smallest-optional-dependent-closure-or-preserve-ems",
+        )
+    if target_seeded:
+        return (
+            "yes-remove-explicit-seed",
+            "remove-only-ems-selection-and-regenerate-initramfs",
+        )
+    if target_selected:
+        return (
+            "yes-remove-generated-direct-selection",
+            "remove-only-ems-selection-and-regenerate-initramfs",
+        )
+    if embedded:
+        return (
+            "unexplained-initramfs-embedding",
+            "trace-generator-before-removal",
+        )
+    return (
+        "yes-not-required-by-safe-initramfs-closure",
+        "trace-rootfs-autoload-before-blacklist-or-rootfs-removal",
+    )
+
+
+def rootfs_ems_references(rootfs: Path | None) -> tuple[str, list[str]]:
+    if rootfs is None:
+        return "unresolved", []
+    rootfs = rootfs.expanduser().resolve()
+    if not rootfs.is_dir():
+        raise InspectionError(f"rootfs tree is not a directory: {rootfs}")
+    relative_files = (
+        "etc/modules",
+        "etc/modules-load.d",
+        "usr/lib/modules-load.d",
+        "etc/modprobe.d",
+        "usr/lib/modprobe.d",
+        "lib/udev/rules.d",
+        "usr/lib/udev/rules.d",
+    )
+    candidates: list[Path] = []
+    for relative in relative_files:
+        path = rootfs / relative
+        if path.is_file():
+            candidates.append(path)
+        elif path.is_dir():
+            candidates.extend(sorted(item for item in path.rglob("*") if item.is_file()))
+    references: list[str] = []
+    for path in candidates:
+        for number, raw in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+        ):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            tokens = [normalize_module(token) for token in line.replace("=", " ").split()]
+            if TARGET_NAME in tokens or "ems.ko" in line:
+                references.append(f"{path.relative_to(rootfs)}:{number}:{line}")
+    return "inspected", references
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Inspect exact EMS module selection, dependencies and U0k embedding"
@@ -208,12 +284,17 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path.home() / "a33-port")
     parser.add_argument("--repo", type=Path, default=Path.home() / "Linuxa33")
     parser.add_argument("--aports", type=Path)
+    parser.add_argument(
+        "--rootfs-tree",
+        type=Path,
+        help="optional extracted/mounted rootfs directory to inspect read-only for EMS autoload references",
+    )
     args = parser.parse_args()
 
     root = args.root.expanduser().resolve()
     repo = args.repo.expanduser().resolve()
     source_root = root / "unpacked/twrp-root/lib/modules"
-    stage_root = root / f"build/modules-stage-safe/usr/lib/modules/{KERNEL_RELEASE}"
+    stage_root = root / f"build/modules-stage-safe/usr/lib/modules/{PACKAGE_KREL}"
     modules_dep = stage_root / "modules.dep"
     seeds_file = repo / "config/modules-initfs-safe-debug.seeds"
     original_load = source_root / "modules.load.recovery"
@@ -238,8 +319,10 @@ def main() -> int:
     depends_field = modinfo(staged_ems, "depends")
     if normalize_module(name) != TARGET_NAME:
         raise InspectionError(f"unexpected EMS module name: {name!r}")
-    if not vermagic.startswith(KERNEL_RELEASE):
-        raise InspectionError(f"EMS vermagic mismatch: {vermagic!r}")
+    if vermagic != EXPECTED_MODULE_VERMAGIC:
+        raise InspectionError(
+            f"EMS vermagic mismatch: actual={vermagic!r} expected={EXPECTED_MODULE_VERMAGIC!r}"
+        )
 
     dependencies = parse_modules_dep(modules_dep)
     aliases = build_aliases(dependencies)
@@ -282,19 +365,18 @@ def main() -> int:
     entry_count, initramfs_entries, matching_initramfs_entries = inspect_initramfs(
         initramfs, source_sha
     )
-
-    if not target_selected:
-        removal_class = "not-selected-by-modules-initfs"
-    elif selected_dependents:
-        removal_class = "transitive-dependency-remove-dependent-closure-or-patch-module"
-    elif target_seeded:
-        removal_class = "explicit-seed-can-test-removing-ems-alone"
-    else:
-        removal_class = "selected-without-required-dependent-review-generated-list"
+    omission_class, omission_action = classify_omission(
+        target_selected=target_selected,
+        target_seeded=target_seeded,
+        selected_dependents=selected_dependents,
+        initramfs_target_entries=initramfs_entries,
+    )
+    rootfs_status, rootfs_references = rootfs_ems_references(args.rootfs_tree)
 
     lines = [
         "operation=inspect-exact-a33-ems-module",
-        f"kernel_release={KERNEL_RELEASE}",
+        f"package_krel={PACKAGE_KREL}",
+        f"expected_module_vermagic={EXPECTED_MODULE_VERMAGIC}",
         f"source_module={source_ems}",
         f"staged_module={staged_ems}",
         f"ems_sha256={source_sha}",
@@ -309,10 +391,7 @@ def main() -> int:
         f"safe_seed_count={len(seeds)}",
         f"ems_is_explicit_seed={'yes' if target_seeded else 'no'}",
         f"seed_chain_count={len(seed_chains)}",
-        *[
-            f"seed_chain={seed}:{format_path(chain)}"
-            for seed, chain in seed_chains
-        ],
+        *[f"seed_chain={seed}:{format_path(chain)}" for seed, chain in seed_chains],
         f"aports={aports if aports is not None else 'unresolved'}",
         f"modules_initfs={modules_initfs if modules_initfs is not None else 'unresolved'}",
         f"modules_initfs_entry_count={len(selected_names)}",
@@ -328,7 +407,14 @@ def main() -> int:
         f"u0k_ems_entries={','.join(initramfs_entries)}",
         f"u0k_exact_ems_hash_entry_count={len(matching_initramfs_entries)}",
         f"u0k_exact_ems_hash_entries={','.join(matching_initramfs_entries)}",
-        f"ems_removal_classification={removal_class}",
+        f"rootfs_autoload_config_status={rootfs_status}",
+        f"rootfs_ems_reference_count={len(rootfs_references)}",
+        *[f"rootfs_ems_reference={reference}" for reference in rootfs_references],
+        f"ems_independent_omission={omission_class}",
+        f"ems_omission_next_action={omission_action}",
+        "ems_module_only_replacement=conditional-yes-preserve-name-vermagic-dependencies-exported-symbol-crcs",
+        "whole_kernel_rebuild_required_by_current_evidence=no",
+        f"ems_removal_classification={omission_class}",
         "phone_partition_writes=no",
         "inspection_status=passed",
     ]
