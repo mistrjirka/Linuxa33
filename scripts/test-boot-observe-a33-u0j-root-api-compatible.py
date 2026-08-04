@@ -4,9 +4,12 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 from pathlib import Path
+import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "lib"))
+import a33_rootfs_boot_observer as helper
 
 observer_spec = importlib.util.spec_from_file_location(
     "u0j_observer", HERE / "boot-observe-a33-u0j-root-api-compatible.py"
@@ -14,13 +17,6 @@ observer_spec = importlib.util.spec_from_file_location(
 assert observer_spec and observer_spec.loader
 observer = importlib.util.module_from_spec(observer_spec)
 observer_spec.loader.exec_module(observer)
-
-helper_spec = importlib.util.spec_from_file_location(
-    "observer_helper", HERE / "lib/a33_rootfs_boot_observer.py"
-)
-assert helper_spec and helper_spec.loader
-helper = importlib.util.module_from_spec(helper_spec)
-helper_spec.loader.exec_module(helper)
 
 observer.PROFILE.validate()
 assert observer.PROFILE.expected_flash_operation == "flash-exact-u0j-root-api-compatible"
