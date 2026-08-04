@@ -12,7 +12,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 U0L_BUILDER = HERE / "make-u0l-openrc-cgroup-isolation.py"
 U0K_FLASH = HERE / "flash-a33-u0k-direct-mount-isolation.py"
-EXPECTED_U0L_BUILDER_BLOB = "c976721153b43e4507478597bb6680972b4cc8dc"
+EXPECTED_U0L_BUILDER_BLOB = "6c3133d5efbbdf08c3197eae3693d215fbf1b642"
 EXPECTED_U0K_FLASH_BLOB = "404308fa0e439ea00224ef6f58647fc3cca63778"
 COMPONENTS_UNCHANGED = ("kernel", "dtb", "recovery_dtbo")
 IGNORED_BOOT_INFO_PREFIXES = ("ramdisk size:", "ramdisk_size:")
