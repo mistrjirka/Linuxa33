@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 
 from lib.a33_rootfs_busybox import (
@@ -10,6 +13,16 @@ from lib.a33_rootfs_busybox import (
     build_runtime_upload_plan,
     resolve_verified_busyboxes,
 )
+
+HERE = Path(__file__).resolve().parent
+fixed_spec = importlib.util.spec_from_file_location(
+    "a33_rootfs_handoff_fixed_test",
+    HERE / "audit-a33-rootfs-handoff-fixed.py",
+)
+assert fixed_spec and fixed_spec.loader
+fixed = importlib.util.module_from_spec(fixed_spec)
+sys.modules[fixed_spec.name] = fixed
+fixed_spec.loader.exec_module(fixed)
 
 
 class Entry:
@@ -96,6 +109,37 @@ with tempfile.TemporaryDirectory() as temp:
     else:
         raise AssertionError("missing BusyBox runtime upload was accepted")
 
+    root_uuid = "7b056328-bdfb-496b-ac38-2624c43c863a"
+    shim = root / "blkid"
+    shim.write_text(fixed.build_blkid_shim(root_uuid), encoding="utf-8")
+    shim.chmod(0o755)
+    correct = subprocess.run(
+        ["sh", str(shim), "/dev/block/sda36"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert correct.returncode == 0
+    assert f'UUID="{root_uuid}"' in correct.stdout
+    assert 'LABEL="pmOS_root"' in correct.stdout
+    assert 'TYPE="ext4"' in correct.stdout
+    wrong = subprocess.run(
+        ["sh", str(shim), "/dev/block/sda35"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert wrong.returncode == 2
+    assert f'{fixed.RUNTIME_DIR}/tools' in fixed.TWRP_FUNCTION_TEST
+
+    try:
+        fixed.build_blkid_shim("not-a-uuid")
+    except fixed.base.Refusal:
+        pass
+    else:
+        raise AssertionError("invalid UUID was accepted for blkid shim")
+
     bad_report = dict(report)
     bad_report["busybox_binary_sha256"] = "0" * 64
     try:
@@ -116,4 +160,7 @@ print("cpio_basename_discovery=passed")
 print("u0h_hash_bound_rootfs_fallback=passed")
 print("runtime_upload_plan=passed")
 print("missing_runtime_upload_refusal=passed")
+print("superblock_bound_blkid_shim=passed")
+print("blkid_shim_wrong_target_refusal=passed")
+print("invalid_blkid_shim_uuid_refusal=passed")
 print("mismatching_hash_refusal=passed")
