@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import uuid
 
 HERE = Path(__file__).resolve().parent
 LIB = HERE / "lib"
@@ -105,10 +106,12 @@ echo exact_initramfs_busybox_dynamic_scope=passed
 
 TWRP_FUNCTION_TEST = r'''set -eu
 function_file="$1"
-PATH=/sbin:/system/bin:/system/xbin
+runtime_dir="$2"
+PATH="$runtime_dir/tools:/sbin:/system/bin:/system/xbin"
 export PATH
 . "$function_file"
 
+echo "blkid_command=$(command -v blkid)"
 echo "direct_blkid=$(blkid /dev/block/sda36 2>/dev/null || true)"
 stdout_value="$(find_root_partition)"
 echo "stdout_rc=$?"
@@ -126,6 +129,23 @@ consumer() {
 }
 consumer
 echo exact_u0j_dual_api_runtime=passed
+'''
+
+
+def build_blkid_shim(root_uuid: str, root_label: str = "pmOS_root") -> str:
+    """Build a deterministic blkid shim from independently parsed ext4 identity."""
+
+    try:
+        normalized_uuid = str(uuid.UUID(root_uuid))
+    except ValueError as exc:
+        raise base.Refusal(f"invalid ext4 UUID for blkid shim: {root_uuid!r}") from exc
+    if root_label != "pmOS_root":
+        raise base.Refusal(f"unexpected ext4 label for blkid shim: {root_label!r}")
+    return f'''#!/bin/sh
+set -eu
+[ "$#" -eq 1 ] || exit 2
+[ "$1" = /dev/block/sda36 ] || exit 2
+printf '%s\\n' '/dev/block/sda36: LABEL="pmOS_root" UUID="{normalized_uuid}" TYPE="ext4"'
 '''
 
 
@@ -182,9 +202,20 @@ def test_exact_busybox_runtime(
     binaries: dict[str, Path],
     out: Path,
 ) -> None:
-    """Prove shell semantics and the exact U0j function without ELF-loader ambiguity."""
+    """Prove BusyBox scoping and exact U0j behavior without TWRP tool assumptions."""
 
     _run_exact_busybox_scope_test(binaries, out)
+
+    root_uuid, root_label = base.common.ext4_identity(adb, serial)
+    blkid_shim = out / "twrp-blkid-shim.sh"
+    base.write_text(blkid_shim, build_blkid_shim(root_uuid, root_label))
+    base.write_text(
+        out / "twrp-blkid-shim-identity.txt",
+        "identity_source=ext4-superblock-read-via-adb\n"
+        f"root_uuid={root_uuid}\n"
+        f"root_label={root_label}\n"
+        f"shim_sha256={base.sha_file(blkid_shim)}\n",
+    )
 
     local_test = out / "u0j-find-root-runtime-test.sh"
     base.write_text(local_test, TWRP_FUNCTION_TEST)
@@ -195,11 +226,12 @@ def test_exact_busybox_runtime(
     plan = (
         (find_root, f"{RUNTIME_DIR}/find_root_partition.sh"),
         (local_test, f"{RUNTIME_DIR}/runtime-test.sh"),
+        (blkid_shim, f"{RUNTIME_DIR}/blkid"),
     )
     base.common.adb_shell(
         adb,
         serial,
-        'set -eu\nrm -rf "$1"\nmkdir -p "$1"\n',
+        'set -eu\nrm -rf "$1"\nmkdir -p "$1/tools"\n',
         RUNTIME_DIR,
     )
 
@@ -223,15 +255,18 @@ def test_exact_busybox_runtime(
 
         remote_script = r'''set -eu
 dir="$1"
-command -v blkid >/dev/null 2>&1 || { echo twrp_blkid=missing; exit 90; }
-chmod 755 "$dir/runtime-test.sh"
-sh "$dir/runtime-test.sh" "$dir/find_root_partition.sh"
+chmod 755 "$dir/runtime-test.sh" "$dir/blkid"
+rm -f "$dir/tools/blkid"
+ln -s "$dir/blkid" "$dir/tools/blkid"
+sh "$dir/runtime-test.sh" "$dir/find_root_partition.sh" "$dir"
 '''
         output = base.common.adb_shell(adb, serial, remote_script, RUNTIME_DIR)
         base.write_text(out / "runtime-upload-verification.txt", "\n".join(evidence) + "\n")
         base.write_text(out / "exact-u0j-find-root-runtime.txt", output)
         if output.count("exact_u0j_dual_api_runtime=passed") != 1:
             raise base.Refusal("exact U0j function test against TWRP sda36 failed")
+        if f'UUID="{root_uuid}"' not in output or 'LABEL="pmOS_root"' not in output:
+            raise base.Refusal("U0j runtime test did not consume the superblock-bound blkid shim")
     finally:
         base.common.adb_shell(
             adb,
