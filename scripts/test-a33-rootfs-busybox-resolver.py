@@ -79,7 +79,14 @@ with tempfile.TemporaryDirectory() as temp:
         output_dir=direct_out,
     )
     assert binaries["busybox"].read_bytes() == busybox
-    assert any("source=cpio:" in line for line in evidence)
+    selected_busybox = [
+        line
+        for line in evidence
+        if line.startswith("busybox_selected=busybox ")
+    ]
+    assert len(selected_busybox) == 1
+    assert "source=cpio-" in selected_busybox[0]
+    assert "rootfs-verified-by-u0h" not in selected_busybox[0]
 
     find_root = root / "find_root_partition.sh"
     runtime_test = root / "runtime-test.sh"
