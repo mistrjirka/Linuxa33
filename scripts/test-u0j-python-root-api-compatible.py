@@ -44,6 +44,35 @@ assert modes.count("stdout-command-substitution") == 1
 assert modes.count("stdout-direct") == 1
 assert modes.count("output-variable:partition") == 3
 
+consumer_texts = {
+    "init_functions.sh": '''find_root_partition() {
+\techo old
+}
+wait_root_partition() {
+\techo old
+}
+mount_root_partition() {
+\tlocal partition
+\tfind_root_partition partition
+}
+''',
+    "init_functions_2nd.sh": '''resize_root_partition() {
+\tlocal partition
+\tfind_root_partition partition
+}
+resize_root_filesystem() {
+\tlocal partition
+\tfind_root_partition partition
+}
+''',
+}
+consumers = module.validate_output_variable_consumers(consumer_texts)
+assert consumers == [
+    "init_functions_2nd.sh:resize_root_partition",
+    "init_functions_2nd.sh:resize_root_filesystem",
+    "init_functions.sh:mount_root_partition",
+]
+
 patched, original_find, original_wait, replacement = module.patch_find_only(sample)
 assert "partition=\"$a33x_root\"" in replacement
 assert 'case "$#" in' in replacement
@@ -63,6 +92,17 @@ except module.Refusal:
     pass
 else:
     raise AssertionError("unsupported output-variable API was accepted")
+
+missing_local = dict(consumer_texts)
+missing_local["init_functions.sh"] = missing_local["init_functions.sh"].replace(
+    "\tlocal partition\n", "", 1
+)
+try:
+    module.validate_output_variable_consumers(missing_local)
+except module.Refusal:
+    pass
+else:
+    raise AssertionError("output-variable consumer without local partition was accepted")
 
 # Verify the exact assignment technique used by U0j with the host's POSIX shell.
 # BusyBox ash and dash use dynamic scoping for local variables, so assigning
@@ -96,6 +136,8 @@ print("u0j_python_self_test=passed")
 print("find_root_stdout_api=passed")
 print("find_root_output_variable_api=passed")
 print("caller_local_dynamic_assignment=passed")
+print("caller_local_partition_contract=passed")
 print("unsupported_call_shape_refusal=passed")
+print("missing_local_partition_refusal=passed")
 print("wait_root_function_preserved=passed")
 print("only_find_root_function_changed=passed")
