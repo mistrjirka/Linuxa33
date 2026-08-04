@@ -107,12 +107,28 @@ fi
 cleanup
 trap - EXIT
 rm -rf "$OUT"
+
+# The proven generic recovery builder intentionally reads
+# $ROOT/export-debug/initramfs. Provide an isolated root view so the U0g export
+# is never overwritten and the builder itself remains byte-for-byte unchanged.
+BUILD_ROOT="$(mktemp -d)"
+cleanup_build_root() { rm -rf "$BUILD_ROOT"; }
+trap cleanup_build_root EXIT
+mkdir -p "$BUILD_ROOT/export-debug"
+ln -s "$ROOT/reference" "$BUILD_ROOT/reference"
+ln -s "$ROOT/aosp-mkbootimg" "$BUILD_ROOT/aosp-mkbootimg"
+ln -s "$ROOT/aosp-avb" "$BUILD_ROOT/aosp-avb"
+ln -s "$ROOT/build" "$BUILD_ROOT/build"
+cp --reflink=auto "$INITRAMFS" "$BUILD_ROOT/export-debug/initramfs"
+
 env \
-    ROOT="$ROOT" \
+    ROOT="$BUILD_ROOT" \
     OUT="$OUT" \
-    PMOS_INITRAMFS="$INITRAMFS" \
     EXTRA_KERNEL_CMDLINE="" \
     bash "$SCRIPT_DIR/make-pmos-debug-recovery.sh"
+
+cleanup_build_root
+trap - EXIT
 
 SOURCE_IMAGE="$OUT/recovery.img"
 [[ -f "$SOURCE_IMAGE" ]] || {
