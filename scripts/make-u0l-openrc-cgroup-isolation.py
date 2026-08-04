@@ -20,7 +20,8 @@ EXPECTED_OPENRC_INSPECTOR_BLOB = "88ad686c732398c6ca8474ce7802fdd772a0f05b"
 EXPECTED_ROOTFS_SHA256 = "79c94efe41da14e72e82cfc66c8e6fac6f04482fa2ea2af024f6b1ebb67d3951"
 EXPECTED_OPENRC_VERSION = "0.63.2-r0"
 ROOTFS_RELATIVE = Path(
-    "build/userdata-rootfs-images/20260803-193947/a33x-userdata-pmos-root.img"
+    "build/userdata-rootfs-images/20260803-193947/"
+    "a33x-userdata-pmos-root.img"
 )
 OPENRC_CGROUP_PATH = PurePosixPath("/usr/libexec/rc/sh/rc-cgroup.sh")
 APK_INSTALLED_PATH = PurePosixPath("/lib/apk/db/installed")
@@ -49,32 +50,32 @@ ANCHOR = (
     "printf '<6>a33x-u0k-direct-mount: stage=cleanup-hooks-done\\n' "
     "> /dev/kmsg 2>/dev/null || true\n"
 )
-MASK_BLOCK = r'''OPENRC_CGROUP_SH=/sysroot/usr/libexec/rc/sh/rc-cgroup.sh
-printf '<6>a33x-u0l-openrc-cgroup-isolation: stage=mask-begin\n' > /dev/kmsg 2>/dev/null || true
+MASK_BLOCK = '''OPENRC_CGROUP_SH=/sysroot/usr/libexec/rc/sh/rc-cgroup.sh
+printf '<6>a33x-u0l-openrc-cgroup-isolation: stage=mask-begin\\n' > /dev/kmsg 2>/dev/null || true
 if [ ! -f "$OPENRC_CGROUP_SH" ]; then
-	printf '<3>a33x-u0l-openrc-cgroup-isolation: error=missing-target\n' > /dev/kmsg 2>/dev/null || true
+	printf '<3>a33x-u0l-openrc-cgroup-isolation: error=missing-target\\n' > /dev/kmsg 2>/dev/null || true
 	echo "U0l refusal: missing $OPENRC_CGROUP_SH"
 	while true; do sleep 3600; done
 fi
 if ! mount -o bind /dev/null "$OPENRC_CGROUP_SH"; then
-	printf '<3>a33x-u0l-openrc-cgroup-isolation: error=bind-mask-failed\n' > /dev/kmsg 2>/dev/null || true
+	printf '<3>a33x-u0l-openrc-cgroup-isolation: error=bind-mask-failed\\n' > /dev/kmsg 2>/dev/null || true
 	echo "U0l refusal: cannot bind-mask $OPENRC_CGROUP_SH"
 	while true; do sleep 3600; done
 fi
 if ! grep -q " $OPENRC_CGROUP_SH " /proc/self/mountinfo; then
-	printf '<3>a33x-u0l-openrc-cgroup-isolation: error=bind-mask-unverified\n' > /dev/kmsg 2>/dev/null || true
+	printf '<3>a33x-u0l-openrc-cgroup-isolation: error=bind-mask-unverified\\n' > /dev/kmsg 2>/dev/null || true
 	echo "U0l refusal: bind-mask is absent from mountinfo"
 	while true; do sleep 3600; done
 fi
-printf '<6>a33x-u0l-openrc-cgroup-isolation: stage=mask-success\n' > /dev/kmsg 2>/dev/null || true
+printf '<6>a33x-u0l-openrc-cgroup-isolation: stage=mask-success\\n' > /dev/kmsg 2>/dev/null || true
 '''
 
 REQUIRED_OPENRC_SNIPPETS = (
-    "cgroup_add_service()",
-    'rc_cgroup_path="${cgroup_path}/openrc.${RC_SVCNAME}"',
-    '[ ! -d "${rc_cgroup_path}" ] && mkdir "${rc_cgroup_path}"',
-    '[ -f "${rc_cgroup_path}"/cgroup.procs ] &&',
-    'printf 0 > "${rc_cgroup_path}"/cgroup.procs',
+    ("cgroup_add_service()", 1),
+    ('rc_cgroup_path="${cgroup_path}/openrc.${RC_SVCNAME}"', 3),
+    ('[ ! -d "${rc_cgroup_path}" ] && mkdir "${rc_cgroup_path}"', 1),
+    ('[ -f "${rc_cgroup_path}"/cgroup.procs ] &&', 1),
+    ('printf 0 > "${rc_cgroup_path}"/cgroup.procs', 1),
 )
 
 
@@ -143,9 +144,14 @@ def inspect_rootfs(root: Path, debugfs: Path) -> tuple[str, str]:
     if data is None:
         refuse(f"cannot read OpenRC cgroup implementation: {OPENRC_CGROUP_PATH}")
     text = data.decode("utf-8", errors="strict")
-    for snippet in REQUIRED_OPENRC_SNIPPETS:
-        if text.count(snippet) != 1:
-            refuse(f"OpenRC cgroup implementation contract changed: {snippet!r}")
+    for snippet, expected_count in REQUIRED_OPENRC_SNIPPETS:
+        actual_count = text.count(snippet)
+        if actual_count != expected_count:
+            refuse(
+                "OpenRC cgroup implementation contract changed: "
+                f"snippet={snippet!r} actual_count={actual_count} "
+                f"expected_count={expected_count}"
+            )
     installed = reader.read_file(APK_INSTALLED_PATH, allow_missing=False)
     if installed is None:
         refuse("cannot read Alpine package database")
