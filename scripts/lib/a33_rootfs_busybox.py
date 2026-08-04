@@ -34,14 +34,12 @@ def resolve_verified_busyboxes(
     report_values: dict[str, str],
     output_dir: Path,
 ) -> tuple[dict[str, Path], list[str]]:
-    """Resolve the exact U0j BusyBox binaries without assuming CPIO path shape.
+    """Resolve exact U0j BusyBox binaries with newc hard-link support.
 
-    Prefer direct non-empty CPIO payloads. If the newc representation uses a
-    hard-link/path form the lightweight parser cannot reconstruct, fall back to
-    the pmbootstrap rootfs copies only after matching the SHA256 values recorded
-    by the U0h finalization report. That report proved the rootfs copies and
-    embedded initramfs copies were byte-identical, and U0i/U0j changed only
-    init_functions.sh.
+    Prefer a CPIO payload resolved according to the archive's hard-link
+    metadata. If that is unavailable, use the pmbootstrap rootfs copy only after
+    matching the SHA256 recorded by U0h, which proved the rootfs and initramfs
+    BusyBox binaries were byte-identical.
     """
 
     specs = (
@@ -60,19 +58,31 @@ def resolve_verified_busyboxes(
         candidates = [
             entry
             for entry in archive.entries
-            if entry.normalized.rsplit("/", 1)[-1] == basename and entry.data
+            if entry.normalized.rsplit("/", 1)[-1] == basename
         ]
         selected_data: bytes | None = None
         selected_source = ""
         for entry in candidates:
-            actual = hashlib.sha256(entry.data).hexdigest()
+            try:
+                data = archive.resolved_data(entry.normalized)
+                source_kind = "cpio-hardlink-resolved"
+            except (AttributeError, TypeError):
+                data = entry.data
+                source_kind = "cpio-direct"
+            if not data:
+                evidence.append(
+                    f"busybox_candidate={basename} source={source_kind}:{entry.normalized} "
+                    "size=0 status=empty"
+                )
+                continue
+            actual = hashlib.sha256(data).hexdigest()
             evidence.append(
-                f"busybox_candidate={basename} source=cpio:{entry.normalized} "
-                f"size={len(entry.data)} sha256={actual}"
+                f"busybox_candidate={basename} source={source_kind}:{entry.normalized} "
+                f"size={len(data)} sha256={actual}"
             )
             if actual == expected:
-                selected_data = entry.data
-                selected_source = f"cpio:{entry.normalized}"
+                selected_data = data
+                selected_source = f"{source_kind}:{entry.normalized}"
                 break
 
         destination = output_dir / basename
@@ -115,12 +125,7 @@ def build_runtime_upload_plan(
     find_root_script: Path,
     runtime_test_script: Path,
 ) -> tuple[tuple[Path, str], ...]:
-    """Return an exact, fail-closed local-to-remote upload plan.
-
-    The runtime test requires both resolved BusyBox binaries plus the exact U0j
-    function and its test script. Reject extra/missing keys so a resolver naming
-    mismatch cannot silently skip an upload again.
-    """
+    """Return an exact, fail-closed local-to-remote upload plan."""
 
     if set(binaries) != {"busybox", "busybox-extras"}:
         raise BusyBoxResolutionError(
