@@ -36,7 +36,9 @@ assert counts["u0l_mask_error_count"] == 0
 assert counts["u0k_mount_success_count"] == 1
 assert counts["u0k_cleanup_done_count"] == 1
 assert counts["u0k_switch_root_begin_count"] == 1
-assert counts["openrc_count"] == 1
+# The generic OpenRC counter intentionally also matches the two U0l marker
+# namespace occurrences containing "openrc".
+assert counts["openrc_count"] == 3
 assert counts["sshd_count"] == 1
 focused = module.focused_lines(fixture)
 assert any("mask-success" in line for line in focused)
