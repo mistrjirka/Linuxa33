@@ -86,27 +86,57 @@ import sys
 
 root = Path(sys.argv[1])
 files = sys.argv[2:]
-allowed = {"shell", "push", "exec-out", "reboot"}
+allowed = {"devices", "get-state", "get-serialno", "shell", "push", "exec-out", "reboot"}
+selected_allowed = {"shell", "push", "exec-out", "reboot"}
 found: dict[str, list[str]] = {}
 problems: list[str] = []
-pattern = re.compile(r'''(?x)
-    (?:"\$ADB"|'\$ADB'|\$ADB)
-    \s+
-    ([A-Za-z0-9_-]+)
-''')
+
+# Match $ADB only where it is syntactically positioned as a command, including
+# after shell control operators and reserved words. This deliberately does not
+# match data occurrences such as: for command in "$ADB" readlink ...
+command_prefix = r'''(?:
+    ^
+    | [;&|(){}]
+    | \b(?:if|then|elif|else|while|until|do|time|command)\b
+    | !
+)\s*'''
+selected_pattern = re.compile(
+    command_prefix + r'''(?:"\$ADB"|'\$ADB'|\$ADB)\s+([A-Za-z0-9_-]+)''',
+    re.VERBOSE,
+)
+
 for filename in files:
     path = root / filename
     text = path.read_text(errors="replace")
     for number, line in enumerate(text.splitlines(), 1):
-        for match in pattern.finditer(line):
+        for match in selected_pattern.finditer(line):
             command = match.group(1)
             found.setdefault(command, []).append(f"{filename}:{number}")
-            if command not in allowed:
+            if command not in selected_allowed:
                 problems.append(f"disallowed adb subcommand {command}: {filename}:{number}")
-    if re.search(r'''(?:"\$ADB"|'\$ADB'|\$ADB)\s+exec-in(?:\s|$)''', text):
-        problems.append(f"actual adb exec-in invocation remains in {filename}")
-    if re.search(r'''(?:"\$ADB"|'\$ADB'|\$ADB)\s+help(?:\s|$)''', text):
-        problems.append(f"adb help text is used as capability detection in {filename}")
+
+helper_path = root / "lib/a33-adb-runtime.sh"
+helper_text = helper_path.read_text(errors="replace")
+helper_patterns = {
+    "devices": re.compile(r'''"\$A33_ADB_BIN"\s+devices\b'''),
+    "shell": re.compile(r'''"\$A33_ADB_BIN"\s+-s\s+"\$serial"\s+shell\b'''),
+    "get-state": re.compile(r'''"\$A33_ADB_BIN"\s+-s\s+"\$serial"\s+get-state\b'''),
+    "get-serialno": re.compile(r'''"\$A33_ADB_BIN"\s+-s\s+"\$serial"\s+get-serialno\b'''),
+}
+for command, pattern in helper_patterns.items():
+    locations = [
+        f"lib/a33-adb-runtime.sh:{number}"
+        for number, line in enumerate(helper_text.splitlines(), 1)
+        if pattern.search(line)
+    ]
+    if not locations:
+        problems.append(f"required raw adb helper invocation is missing: {command}")
+    else:
+        found.setdefault(command, []).extend(locations)
+
+if re.search(r'''"\$A33_ADB_BIN"[^\n]*\b(?:exec-in|help)\b''', helper_text):
+    problems.append("raw adb helper contains prohibited exec-in or help invocation")
+
 if problems:
     raise SystemExit("\n".join(problems))
 for command in sorted(found):
