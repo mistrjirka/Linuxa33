@@ -14,6 +14,7 @@ module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
+assert module.PACKAGE_KREL != module.EXPECTED_MODULE_VERMAGIC
 assert module.normalize_module("kernel/sched/ems.ko") == "ems"
 assert module.normalize_module("foo-bar.ko.xz") == "foo_bar"
 
@@ -21,7 +22,9 @@ with tempfile.TemporaryDirectory() as temp:
     root = Path(temp)
     modules_dep = root / "modules.dep"
     modules_dep.write_text(
-        "kernel/ems.ko:\n"
+        "kernel/ems.ko: kernel/cmupmucal.ko kernel/ect_parser.ko\n"
+        "kernel/cmupmucal.ko:\n"
+        "kernel/ect_parser.ko:\n"
         "kernel/exynos-dm.ko: kernel/ems.ko\n"
         "kernel/usb.ko: kernel/exynos-dm.ko\n"
         "kernel/independent.ko:\n",
@@ -34,6 +37,10 @@ with tempfile.TemporaryDirectory() as temp:
     independent = module.resolve_module("independent", aliases)
 
     assert target == "kernel/ems.ko"
+    assert dependencies[target] == (
+        "kernel/cmupmucal.ko",
+        "kernel/ect_parser.ko",
+    )
     assert module.dependency_path(dependencies, usb, target) == (
         "kernel/usb.ko",
         "kernel/exynos-dm.ko",
@@ -48,6 +55,43 @@ with tempfile.TemporaryDirectory() as temp:
         "usb -> exynos_dm -> ems"
     )
 
+    classification, action = module.classify_omission(
+        target_selected=True,
+        target_seeded=True,
+        selected_dependents=[],
+        initramfs_target_entries=["lib/modules/ems.ko"],
+    )
+    assert classification == "yes-remove-explicit-seed"
+    assert "regenerate-initramfs" in action
+
+    classification, action = module.classify_omission(
+        target_selected=True,
+        target_seeded=False,
+        selected_dependents=["kernel/exynos-dm.ko"],
+        initramfs_target_entries=["lib/modules/ems.ko"],
+    )
+    assert classification == "no-independent-omission"
+    assert "dependent-closure" in action
+
+    classification, action = module.classify_omission(
+        target_selected=False,
+        target_seeded=False,
+        selected_dependents=[],
+        initramfs_target_entries=[],
+    )
+    assert classification == "yes-not-required-by-safe-initramfs-closure"
+    assert "rootfs-autoload" in action
+
+    rootfs = root / "rootfs"
+    (rootfs / "etc/modules-load.d").mkdir(parents=True)
+    (rootfs / "etc/modules-load.d/vendor.conf").write_text(
+        "# comment\nems\nother\n", encoding="utf-8"
+    )
+    status, references = module.rootfs_ems_references(rootfs)
+    assert status == "inspected"
+    assert references == ["etc/modules-load.d/vendor.conf:2:ems"]
+    assert module.rootfs_ems_references(None) == ("unresolved", [])
+
     duplicate = root / "duplicate.dep"
     duplicate.write_text("a/ems.ko:\nb/ems.ko:\n", encoding="utf-8")
     duplicate_dependencies = module.parse_modules_dep(duplicate)
@@ -59,8 +103,11 @@ with tempfile.TemporaryDirectory() as temp:
         raise AssertionError("ambiguous EMS aliases were accepted")
 
 print("a33_ems_inspection_self_test=passed")
-print("module_name_normalization=passed")
-print("modules_dep_parser=passed")
+print("package_label_module_abi_distinction=passed")
+print("declared_dependency_set=passed")
 print("transitive_dependency_path=passed")
 print("reverse_dependency_set=passed")
+print("independent_omission_classification=passed")
+print("dependent_closure_classification=passed")
+print("rootfs_autoload_reference_scan=passed")
 print("ambiguous_alias_refusal=passed")
