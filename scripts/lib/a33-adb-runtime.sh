@@ -29,8 +29,15 @@ a33_init_recovery_adb() {
         output="$("$A33_ADB_BIN" devices -l 2>&1)" ||
             a33_die "adb devices -l failed" || return 1
 
+        # adb may print daemon startup diagnostics to stderr before the table.
+        # Count only non-empty transport rows after the exact table header.
         mapfile -t a33_transport_lines < <(
-            printf '%s\n' "$output" | awk 'NR > 1 && NF {print}'
+            printf '%s\n' "$output" |
+                tr -d '\r' |
+                awk '
+                    $0 == "List of devices attached" { in_table=1; next }
+                    in_table && NF >= 2 { print }
+                '
         )
 
         if ((${#a33_transport_lines[@]} > 1)); then
