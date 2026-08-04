@@ -5,7 +5,6 @@ import argparse
 from dataclasses import dataclass
 import hashlib
 import importlib.util
-import os
 from pathlib import Path
 import re
 import stat
@@ -206,7 +205,6 @@ def unpack_twrp_components(
         temporary.cleanup()
         record(checks, "twrp_component_extraction", "failed", f"missing={','.join(missing)}")
         return None
-    # Keep the TemporaryDirectory alive for the caller through a hidden value.
     components["__temporary__"] = temporary  # type: ignore[assignment]
     record(checks, "twrp_component_extraction", "passed", str(output))
     return components
@@ -255,36 +253,98 @@ def audit_prebuilt_kernel(
         temporary.cleanup()  # type: ignore[union-attr]
 
 
-def audit_modules(checks: list[Check], root: Path) -> bool:
-    module_root = root / f"unpacked/twrp-root/lib/modules"
+def module_vermagic_matches(path: Path) -> bool:
+    """Validate the actual module ABI without assuming a directory layout."""
+
+    needle = ("vermagic=" + EXPECTED_KERNEL_RELEASE).encode("ascii")
+    with path.open("rb") as stream:
+        remainder = b""
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                return needle in remainder
+            data = remainder + chunk
+            if needle in data:
+                return True
+            remainder = data[-len(needle) :]
+
+
+def audit_modules(
+    checks: list[Check], root: Path, reconstruction_values: dict[str, str] | None = None
+) -> bool:
+    module_root = root / "unpacked/twrp-root/lib/modules"
     if not module_root.is_dir():
         record(checks, "original_module_tree", "missing", str(module_root))
         return False
-    modules = sorted(module_root.rglob("*.ko"))
-    release_matches = [path for path in module_root.iterdir() if path.is_dir()]
-    release_names = sorted(path.name for path in release_matches)
-    if EXPECTED_KERNEL_RELEASE not in release_names:
-        record(
-            checks,
-            "original_module_tree",
-            "failed",
-            f"release_dirs={','.join(release_names)} expected={EXPECTED_KERNEL_RELEASE}",
-        )
-        return False
-    manifest_hash = tree_sha256(module_root, modules)
+
+    nested = module_root / EXPECTED_KERNEL_RELEASE
+    if nested.is_dir():
+        release_root = nested
+        layout = "nested-release-directory"
+    else:
+        release_root = module_root
+        layout = "flat-release-root"
+
+    modules = sorted(release_root.rglob("*.ko"))
+    manifest_hash = tree_sha256(release_root, modules) if modules else "none"
     if len(modules) != EXPECTED_ORIGINAL_MODULES:
         record(
             checks,
             "original_module_tree",
             "failed",
-            f"module_count={len(modules)} expected={EXPECTED_ORIGINAL_MODULES} tree_sha256={manifest_hash}",
+            f"layout={layout} module_count={len(modules)} expected={EXPECTED_ORIGINAL_MODULES} "
+            f"tree_sha256={manifest_hash}",
         )
         return False
+
+    load_file = release_root / "modules.load.recovery"
+    if not load_file.is_file():
+        record(
+            checks,
+            "original_module_tree",
+            "failed",
+            f"layout={layout} missing={load_file} module_count={len(modules)}",
+        )
+        return False
+
+    bad_vermagic = [path for path in modules if not module_vermagic_matches(path)]
+    if bad_vermagic:
+        sample = ",".join(path.relative_to(release_root).as_posix() for path in bad_vermagic[:5])
+        record(
+            checks,
+            "original_module_tree",
+            "failed",
+            f"layout={layout} vermagic_mismatch_count={len(bad_vermagic)} sample={sample} "
+            f"expected={EXPECTED_KERNEL_RELEASE}",
+        )
+        return False
+
+    if reconstruction_values:
+        recorded_source = reconstruction_values.get("module_source", "")
+        recorded_count = reconstruction_values.get("module_files", "")
+        if recorded_source and Path(recorded_source).resolve() != module_root.resolve():
+            record(
+                checks,
+                "original_module_tree",
+                "failed",
+                f"manifest_module_source={recorded_source} actual={module_root}",
+            )
+            return False
+        if recorded_count and recorded_count != str(EXPECTED_ORIGINAL_MODULES):
+            record(
+                checks,
+                "original_module_tree",
+                "failed",
+                f"manifest_module_files={recorded_count} expected={EXPECTED_ORIGINAL_MODULES}",
+            )
+            return False
+
     record(
         checks,
         "original_module_tree",
         "passed",
-        f"module_count={len(modules)} release={EXPECTED_KERNEL_RELEASE} tree_sha256={manifest_hash}",
+        f"layout={layout} module_count={len(modules)} release={EXPECTED_KERNEL_RELEASE} "
+        f"vermagic_all=passed tree_sha256={manifest_hash}",
     )
     return True
 
@@ -341,9 +401,7 @@ def validate_source_lock(path: Path) -> tuple[bool, str]:
 
 def write_report(path: Path, checks: list[Check], summary: dict[str, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines: list[str] = []
-    for check in checks:
-        lines.append(f"check={check.name} status={check.status} detail={check.detail}")
+    lines = [f"check={check.name} status={check.status} detail={check.detail}" for check in checks]
     lines.extend(f"{key}={value}" for key, value in summary.items())
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -396,19 +454,22 @@ def main() -> int:
     )
     u0k_ok = audit_u0k_artifacts(checks, root, repo)
     prebuilt_ok = twrp_ok and audit_prebuilt_kernel(checks, root, repo, twrp)
-    modules_ok = audit_modules(checks, root)
 
     reconstruction = root / "build/third-host-reconstruction/manifest.txt"
     reconstruction_values = kv(reconstruction) if reconstruction.is_file() else {}
     if reconstruction.is_file():
+        reconstruction_status = reconstruction_values.get("status", "")
         record(
             checks,
             "third_host_reconstruction_manifest",
-            "passed",
-            f"path={reconstruction} sha256={sha_file(reconstruction)}",
+            "passed" if reconstruction_status == "complete" else "failed",
+            f"path={reconstruction} status={reconstruction_status or 'missing'} "
+            f"sha256={sha_file(reconstruction)}",
         )
     else:
         record(checks, "third_host_reconstruction_manifest", "missing", str(reconstruction))
+
+    modules_ok = audit_modules(checks, root, reconstruction_values)
 
     mkbootimg_ok = audit_git_tool(
         checks,
@@ -428,7 +489,12 @@ def main() -> int:
     if key_ok:
         mode = stat.S_IMODE(key.stat().st_mode)
         if mode & 0o077:
-            record(checks, "local_avb_key_permissions", "failed", f"mode={mode:04o}")
+            record(
+                checks,
+                "local_avb_key_permissions",
+                "failed",
+                f"mode={mode:04o} required=0600 fix=chmod-600:{key}",
+            )
             key_ok = False
         else:
             record(
