@@ -97,6 +97,28 @@ def resolve_module(value: str, aliases: dict[str, str]) -> str:
     raise InspectionError(f"module is absent from modules.dep: {value}")
 
 
+def parse_modinfo_depends(value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def build_direct_dependency_graph_from_fields(
+    dependency_fields: dict[str, str], aliases: dict[str, str]
+) -> dict[str, tuple[str, ...]]:
+    graph: dict[str, tuple[str, ...]] = {}
+    for module, field in dependency_fields.items():
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for declared in parse_modinfo_depends(field):
+            dependency = resolve_module(declared, aliases)
+            if dependency == module:
+                raise InspectionError(f"module directly depends on itself: {module}")
+            if dependency not in seen:
+                seen.add(dependency)
+                resolved.append(dependency)
+        graph[module] = tuple(resolved)
+    return graph
+
+
 def dependency_path(
     dependencies: dict[str, tuple[str, ...]], start: str, target: str
 ) -> tuple[str, ...] | None:
@@ -112,6 +134,16 @@ def dependency_path(
         for dependency in dependencies.get(current, ()):
             queue.append((dependency, (*path, dependency)))
     return None
+
+
+def reverse_direct_dependencies(
+    dependencies: dict[str, tuple[str, ...]], target: str
+) -> list[str]:
+    return sorted(
+        module
+        for module, declared in dependencies.items()
+        if module != target and target in declared
+    )
 
 
 def reverse_dependencies(
@@ -139,7 +171,7 @@ def find_unique_module(root: Path, name: str) -> Path:
     return matches[0]
 
 
-def modinfo(path: Path, field: str) -> str:
+def modinfo(path: Path, field: str, *, allow_empty: bool = False) -> str:
     executable = shutil.which("modinfo")
     if executable is None:
         raise InspectionError("modinfo is unavailable; install kmod")
@@ -155,9 +187,23 @@ def modinfo(path: Path, field: str) -> str:
             f"modinfo -F {field} failed for {path}: {completed.stderr.strip()}"
         )
     value = completed.stdout.strip()
-    if not value:
+    if not value and not allow_empty:
         raise InspectionError(f"modinfo -F {field} returned empty output for {path}")
     return value
+
+
+def build_direct_dependency_graph(
+    stage_root: Path,
+    module_index: dict[str, tuple[str, ...]],
+    aliases: dict[str, str],
+) -> tuple[dict[str, tuple[str, ...]], dict[str, str]]:
+    fields: dict[str, str] = {}
+    for module in sorted(module_index):
+        path = stage_root / module
+        if not path.is_file():
+            raise InspectionError(f"modules.dep references missing staged module: {path}")
+        fields[module] = modinfo(path, "depends", allow_empty=True)
+    return build_direct_dependency_graph_from_fields(fields, aliases), fields
 
 
 def resolve_aports(explicit: Path | None) -> Path | None:
@@ -316,7 +362,7 @@ def main() -> int:
 
     name = modinfo(staged_ems, "name")
     vermagic = modinfo(staged_ems, "vermagic")
-    depends_field = modinfo(staged_ems, "depends")
+    depends_field = modinfo(staged_ems, "depends", allow_empty=True)
     if normalize_module(name) != TARGET_NAME:
         raise InspectionError(f"unexpected EMS module name: {name!r}")
     if vermagic != EXPECTED_MODULE_VERMAGIC:
@@ -324,17 +370,22 @@ def main() -> int:
             f"EMS vermagic mismatch: actual={vermagic!r} expected={EXPECTED_MODULE_VERMAGIC!r}"
         )
 
-    dependencies = parse_modules_dep(modules_dep)
-    aliases = build_aliases(dependencies)
+    modules_dep_closure = parse_modules_dep(modules_dep)
+    aliases = build_aliases(modules_dep_closure)
+    direct_dependencies, direct_dependency_fields = build_direct_dependency_graph(
+        stage_root, modules_dep_closure, aliases
+    )
     target = resolve_module(name, aliases)
-    declared_dependencies = dependencies.get(target, ())
-    reverse_all = reverse_dependencies(dependencies, target)
+    target_direct_dependencies = direct_dependencies.get(target, ())
+    target_modules_dep_closure = modules_dep_closure.get(target, ())
+    reverse_direct_all = reverse_direct_dependencies(direct_dependencies, target)
+    reverse_all = reverse_dependencies(direct_dependencies, target)
 
     seeds = read_items(seeds_file)
     seed_paths = [(seed, resolve_module(seed, aliases)) for seed in seeds]
     seed_chains: list[tuple[str, tuple[str, ...]]] = []
     for seed, seed_path in seed_paths:
-        chain = dependency_path(dependencies, seed_path, target)
+        chain = dependency_path(direct_dependencies, seed_path, target)
         if chain is not None:
             seed_chains.append((seed, chain))
 
@@ -353,14 +404,26 @@ def main() -> int:
         except InspectionError:
             unresolved_selected.append(selected)
 
+    selected_direct_dependents = sorted(
+        module
+        for module in selected_paths
+        if module != target and target in direct_dependencies.get(module, ())
+    )
     selected_dependents = sorted(
         module
         for module in selected_paths
-        if module != target and dependency_path(dependencies, module, target) is not None
+        if module != target
+        and dependency_path(direct_dependencies, module, target) is not None
     )
+    selected_chains = [
+        (module, dependency_path(direct_dependencies, module, target))
+        for module in selected_dependents
+    ]
     target_selected = target in selected_paths
     target_seeded = any(path == target for _, path in seed_paths)
-    original_direct_load = any(normalize_module(item) == TARGET_NAME for item in read_items(original_load))
+    original_direct_load = any(
+        normalize_module(item) == TARGET_NAME for item in read_items(original_load)
+    )
 
     entry_count, initramfs_entries, matching_initramfs_entries = inspect_initramfs(
         initramfs, source_sha
@@ -377,6 +440,9 @@ def main() -> int:
         "operation=inspect-exact-a33-ems-module",
         f"package_krel={PACKAGE_KREL}",
         f"expected_module_vermagic={EXPECTED_MODULE_VERMAGIC}",
+        "dependency_graph_source=modinfo-F-depends",
+        "modules_dep_role=path-index-and-load-closure",
+        f"direct_dependency_module_count={len(direct_dependency_fields)}",
         f"source_module={source_ems}",
         f"staged_module={staged_ems}",
         f"ems_sha256={source_sha}",
@@ -384,8 +450,12 @@ def main() -> int:
         f"ems_vermagic={vermagic}",
         f"ems_modinfo_depends={depends_field}",
         f"ems_modules_dep_path={target}",
-        f"ems_declared_dependency_count={len(declared_dependencies)}",
-        f"ems_declared_dependencies={','.join(declared_dependencies)}",
+        f"ems_declared_dependency_count={len(target_direct_dependencies)}",
+        f"ems_declared_dependencies={','.join(target_direct_dependencies)}",
+        f"ems_modules_dep_closure_dependency_count={len(target_modules_dep_closure)}",
+        f"ems_modules_dep_closure_dependencies={','.join(target_modules_dep_closure)}",
+        f"ems_direct_reverse_dependency_count_all={len(reverse_direct_all)}",
+        f"ems_direct_reverse_dependencies_all={','.join(reverse_direct_all)}",
         f"ems_reverse_dependency_count_all={len(reverse_all)}",
         f"ems_reverse_dependencies_all={','.join(reverse_all)}",
         f"safe_seed_count={len(seeds)}",
@@ -398,8 +468,15 @@ def main() -> int:
         f"modules_initfs_unresolved_count={len(unresolved_selected)}",
         f"modules_initfs_unresolved={','.join(unresolved_selected)}",
         f"ems_selected_by_modules_initfs={'yes' if target_selected else 'no'}",
+        f"selected_ems_direct_dependent_count={len(selected_direct_dependents)}",
+        f"selected_ems_direct_dependents={','.join(selected_direct_dependents)}",
         f"selected_ems_dependent_count={len(selected_dependents)}",
         f"selected_ems_dependents={','.join(selected_dependents)}",
+        *[
+            f"selected_ems_chain={module}:{format_path(chain)}"
+            for module, chain in selected_chains
+            if chain is not None
+        ],
         f"ems_in_original_twrp_load_list={'yes' if original_direct_load else 'no'}",
         f"u0k_initramfs={initramfs}",
         f"u0k_initramfs_entry_count={entry_count}",
