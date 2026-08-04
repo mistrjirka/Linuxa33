@@ -24,7 +24,12 @@ def load(name: str, path: Path):
 
 
 base = load("a33_rootfs_handoff_audit_base", HERE / "audit-a33-rootfs-handoff.py")
-from a33_rootfs_busybox import BusyBoxResolutionError, resolve_verified_busyboxes
+from a33_rootfs_busybox import (
+    BusyBoxResolutionError,
+    RUNTIME_DIR,
+    build_runtime_upload_plan,
+    resolve_verified_busyboxes,
+)
 
 _original_extract = base.extract_initramfs_artifacts
 
@@ -83,7 +88,113 @@ def extract_initramfs_artifacts(initramfs: Path, out: Path):
     return binaries
 
 
+def _remote_metadata(adb: str, serial: str, remote: str) -> tuple[int, str]:
+    output = base.common.adb_shell(
+        adb,
+        serial,
+        'set -eu\nstat -c "%s" "$1"\nsha256sum "$1"\n',
+        remote,
+    ).splitlines()
+    if len(output) < 2:
+        raise base.Refusal(f"remote upload metadata is incomplete for {remote}: {output!r}")
+    try:
+        size = int(output[0])
+    except ValueError as exc:
+        raise base.Refusal(f"invalid remote size for {remote}: {output[0]!r}") from exc
+    digest = output[1].split()[0]
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise base.Refusal(f"invalid remote SHA256 for {remote}: {digest!r}")
+    return size, digest
+
+
+def test_exact_busybox_runtime(
+    adb: str,
+    serial: str,
+    binaries: dict[str, Path],
+    out: Path,
+) -> None:
+    """Upload, verify and execute the exact U0j BusyBox runtime fixture.
+
+    Every volatile upload is size/SHA-bound before execution. This prevents a
+    resolver-key or remote-path mismatch from silently skipping the binaries.
+    """
+
+    local_test = out / "u0j-find-root-runtime-test.sh"
+    runtime_text = base.RUNTIME_TEST.replace(
+        "/tmp/a33-u0j-tools", f"{RUNTIME_DIR}/tools"
+    ).replace(
+        "/tmp/a33-u0j-find_root_partition.sh",
+        f"{RUNTIME_DIR}/find_root_partition.sh",
+    )
+    base.write_text(local_test, runtime_text)
+
+    try:
+        plan = build_runtime_upload_plan(
+            binaries=binaries,
+            find_root_script=out / "u0j-find_root_partition.sh",
+            runtime_test_script=local_test,
+        )
+    except BusyBoxResolutionError as exc:
+        raise base.Refusal(str(exc)) from exc
+
+    base.common.adb_shell(
+        adb,
+        serial,
+        'set -eu\nrm -rf "$1"\nmkdir -p "$1"\n',
+        RUNTIME_DIR,
+    )
+
+    evidence: list[str] = []
+    try:
+        for local, remote in plan:
+            base.common.run([adb, "-s", serial, "push", str(local), remote])
+            remote_size, remote_sha = _remote_metadata(adb, serial, remote)
+            local_size = local.stat().st_size
+            local_sha = base.sha_file(local)
+            if remote_size != local_size or remote_sha != local_sha:
+                raise base.Refusal(
+                    f"volatile runtime upload mismatch: local={local} remote={remote} "
+                    f"local_size={local_size} remote_size={remote_size} "
+                    f"local_sha={local_sha} remote_sha={remote_sha}"
+                )
+            evidence.append(
+                f"runtime_upload={local.name} remote={remote} size={local_size} "
+                f"sha256={local_sha} status=verified"
+            )
+
+        remote_script = r'''set -eu
+dir="$1"
+chmod 755 "$dir/busybox" "$dir/busybox-extras" "$dir/runtime-test.sh"
+rm -rf "$dir/tools"
+mkdir -p "$dir/tools"
+provider=""
+for candidate in "$dir/busybox" "$dir/busybox-extras"; do
+    if "$candidate" --list | grep -qx blkid; then
+        provider="$candidate"
+        break
+    fi
+done
+[ -n "$provider" ] || { echo blkid_provider=missing; exit 90; }
+ln -s "$provider" "$dir/tools/blkid"
+echo "blkid_provider=$provider"
+"$dir/busybox" sh "$dir/runtime-test.sh"
+'''
+        output = base.common.adb_shell(adb, serial, remote_script, RUNTIME_DIR)
+        base.write_text(out / "runtime-upload-verification.txt", "\n".join(evidence) + "\n")
+        base.write_text(out / "exact-u0j-find-root-runtime.txt", output)
+        if output.count("exact_u0j_dual_api_runtime=passed") != 1:
+            raise base.Refusal("exact embedded BusyBox dual-API runtime test failed")
+    finally:
+        base.common.adb_shell(
+            adb,
+            serial,
+            'rm -rf "$1" 2>/dev/null || true\n',
+            RUNTIME_DIR,
+        )
+
+
 base.extract_initramfs_artifacts = extract_initramfs_artifacts
+base.test_exact_busybox_runtime = test_exact_busybox_runtime
 
 if __name__ == "__main__":
     try:
