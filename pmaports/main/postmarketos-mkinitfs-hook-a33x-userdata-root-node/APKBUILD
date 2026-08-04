@@ -1,0 +1,18 @@
+pkgname=postmarketos-mkinitfs-hook-a33x-userdata-root-node
+pkgver=1
+pkgrel=0
+pkgdesc="Create the verified A33 userdata root block node in the initramfs"
+url="https://github.com/mistrjirka/Linuxa33"
+arch="noarch"
+license="MIT"
+depends="postmarketos-mkinitfs"
+options="!check"
+source="05-a33x-userdata-root-node.sh"
+builddir="$srcdir"
+
+package() {
+	install -Dm755 "$srcdir/05-a33x-userdata-root-node.sh" \
+		"$pkgdir/usr/share/mkinitfs/hooks/05-a33x-userdata-root-node.sh"
+}
+
+sha512sums=""
