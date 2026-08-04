@@ -1,0 +1,22 @@
+name: A33 host gate
+
+on:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - ".github/workflows/host-gate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  host-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run complete host gate
+        run: python3 scripts/run-host-tests.py
