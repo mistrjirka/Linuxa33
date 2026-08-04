@@ -15,7 +15,14 @@ U0K_FLASH = HERE / "flash-a33-u0k-direct-mount-isolation.py"
 EXPECTED_U0L_BUILDER_BLOB = "6c3133d5efbbdf08c3197eae3693d215fbf1b642"
 EXPECTED_U0K_FLASH_BLOB = "404308fa0e439ea00224ef6f58647fc3cca63778"
 COMPONENTS_UNCHANGED = ("kernel", "dtb", "recovery_dtbo")
-IGNORED_BOOT_INFO_PREFIXES = ("ramdisk size:", "ramdisk_size:")
+BOOT_INFO_LAYOUT_FIELDS = ("ramdisk size", "recovery dtbo offset")
+BOOT_INFO_REQUIRED_FIELDS = (
+    "kernel size",
+    "ramdisk size",
+    "second bootloader size",
+    "page size",
+    "recovery dtbo offset",
+)
 
 
 def load(name: str, path: Path):
@@ -41,15 +48,133 @@ def fail(message: str) -> None:
     raise AuditError(message)
 
 
-def normalize_boot_info(text: str) -> str:
-    lines: list[str] = []
+def normalize_boot_info_key(value: str) -> str:
+    return " ".join(value.strip().lower().replace("_", " ").split())
+
+
+def parse_boot_info(text: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.strip()
-        lowered = line.lower()
-        if any(lowered.startswith(prefix) for prefix in IGNORED_BOOT_INFO_PREFIXES):
+        if not line:
             continue
-        lines.append(line)
-    return "\n".join(lines) + "\n"
+        key, separator, value = line.partition(":")
+        if not separator:
+            fail(f"unparseable boot-info line: {raw!r}")
+        normalized = normalize_boot_info_key(key)
+        if not normalized:
+            fail(f"empty boot-info key: {raw!r}")
+        if normalized in fields:
+            fail(f"duplicate boot-info key: {normalized}")
+        fields[normalized] = value.strip()
+    if not fields:
+        fail("boot-info report is empty")
+    return fields
+
+
+def boot_info_int(fields: dict[str, str], key: str) -> int:
+    if key not in fields:
+        fail(f"boot-info is missing required field: {key}")
+    value = fields[key]
+    try:
+        parsed = int(value, 0)
+    except ValueError:
+        try:
+            parsed = int(value, 10)
+        except ValueError as exc:
+            fail(f"invalid integer boot-info field {key}: {value!r}")
+            raise AssertionError from exc
+    if parsed < 0:
+        fail(f"negative boot-info field {key}: {parsed}")
+    return parsed
+
+
+def align_up(value: int, alignment: int) -> int:
+    if value < 0 or alignment <= 0:
+        fail(f"invalid alignment inputs: value={value} alignment={alignment}")
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+def expected_recovery_dtbo_offset(fields: dict[str, str]) -> int:
+    page = boot_info_int(fields, "page size")
+    kernel = boot_info_int(fields, "kernel size")
+    ramdisk = boot_info_int(fields, "ramdisk size")
+    second = boot_info_int(fields, "second bootloader size")
+    return page + align_up(kernel, page) + align_up(ramdisk, page) + align_up(second, page)
+
+
+def validate_boot_info_delta(
+    before_text: str,
+    after_text: str,
+    *,
+    before_ramdisk_size: int,
+    after_ramdisk_size: int,
+) -> dict[str, str]:
+    before = parse_boot_info(before_text)
+    after = parse_boot_info(after_text)
+    if set(before) != set(after):
+        fail(
+            "U0l boot-info field set differs from U0k: "
+            f"removed={sorted(set(before) - set(after))} "
+            f"added={sorted(set(after) - set(before))}"
+        )
+    missing = [key for key in BOOT_INFO_REQUIRED_FIELDS if key not in before]
+    if missing:
+        fail(f"boot-info is missing required layout fields: {missing}")
+
+    before_header_ramdisk = boot_info_int(before, "ramdisk size")
+    after_header_ramdisk = boot_info_int(after, "ramdisk size")
+    if before_header_ramdisk != before_ramdisk_size:
+        fail(
+            "U0k boot header ramdisk size disagrees with extracted ramdisk: "
+            f"header={before_header_ramdisk} extracted={before_ramdisk_size}"
+        )
+    if after_header_ramdisk != after_ramdisk_size:
+        fail(
+            "U0l boot header ramdisk size disagrees with extracted ramdisk: "
+            f"header={after_header_ramdisk} extracted={after_ramdisk_size}"
+        )
+    if before_header_ramdisk == after_header_ramdisk:
+        fail("U0l boot header has no ramdisk-size delta")
+
+    for key in sorted(before):
+        if key in BOOT_INFO_LAYOUT_FIELDS:
+            continue
+        if before[key] != after[key]:
+            fail(
+                f"U0l boot-info field changed unexpectedly: {key}: "
+                f"before={before[key]!r} after={after[key]!r}"
+            )
+
+    before_offset = boot_info_int(before, "recovery dtbo offset")
+    after_offset = boot_info_int(after, "recovery dtbo offset")
+    expected_before_offset = expected_recovery_dtbo_offset(before)
+    expected_after_offset = expected_recovery_dtbo_offset(after)
+    if before_offset != expected_before_offset:
+        fail(
+            "U0k recovery-DTBO offset does not match Android boot layout: "
+            f"actual=0x{before_offset:x} expected=0x{expected_before_offset:x}"
+        )
+    if after_offset != expected_after_offset:
+        fail(
+            "U0l recovery-DTBO offset does not match Android boot layout: "
+            f"actual=0x{after_offset:x} expected=0x{expected_after_offset:x}"
+        )
+
+    stable_lines = [
+        f"{key}: {before[key]}"
+        for key in sorted(before)
+        if key not in BOOT_INFO_LAYOUT_FIELDS
+    ]
+    stable_text = "\n".join(stable_lines) + "\n"
+    return {
+        "stable_boot_info_sha256": v2.sha_bytes(stable_text.encode()),
+        "u0k_header_ramdisk_size": str(before_header_ramdisk),
+        "u0l_header_ramdisk_size": str(after_header_ramdisk),
+        "u0k_recovery_dtbo_offset": f"0x{before_offset:x}",
+        "u0l_recovery_dtbo_offset": f"0x{after_offset:x}",
+        "recovery_dtbo_offset_formula_verified": "yes",
+    }
 
 
 def unpack_recovery(unpacker: Path, image: Path, output: Path) -> dict[str, Path]:
@@ -95,6 +220,8 @@ def compare_component_sets(
         fail("U0l ramdisk is identical to U0k; expected exact initramfs delta is absent")
     result["u0k_ramdisk_sha256"] = before_ramdisk
     result["u0l_ramdisk_sha256"] = after_ramdisk
+    result["u0k_ramdisk_size"] = str(before["ramdisk"].stat().st_size)
+    result["u0l_ramdisk_size"] = str(after["ramdisk"].stat().st_size)
     return result
 
 
@@ -217,10 +344,12 @@ def main() -> int:
     for path in (u0k_info, u0l_info, avb_verify, avb_info):
         if not path.is_file() or not path.read_bytes():
             fail(f"missing generated recovery evidence: {path}")
-    u0k_normalized_info = normalize_boot_info(u0k_info.read_text(errors="strict"))
-    u0l_normalized_info = normalize_boot_info(u0l_info.read_text(errors="strict"))
-    if u0k_normalized_info != u0l_normalized_info:
-        fail("U0l boot header/command-line information differs from U0k beyond ramdisk size")
+    boot_delta = validate_boot_info_delta(
+        u0k_info.read_text(errors="strict"),
+        u0l_info.read_text(errors="strict"),
+        before_ramdisk_size=int(component_hashes["u0k_ramdisk_size"]),
+        after_ramdisk_size=int(component_hashes["u0l_ramdisk_size"]),
+    )
 
     report = root / "build/a33-u0l-candidate-audit.txt"
     pairs: list[tuple[str, object]] = [
@@ -236,14 +365,17 @@ def main() -> int:
         ("initramfs_payload_delta", "init_2nd.sh-only"),
         ("recovery_component_delta", "ramdisk-and-avb-authentication-only"),
         *[(key, value) for key, value in sorted(component_hashes.items())],
-        ("normalized_boot_info_sha256", v2.sha_bytes(u0l_normalized_info.encode())),
+        *[(key, value) for key, value in sorted(boot_delta.items())],
         ("avb_verify_sha256", v2.sha_file(avb_verify)),
         ("avb_info_sha256", v2.sha_file(avb_info)),
         ("kernel_unchanged", "yes"),
         ("dtb_unchanged", "yes"),
         ("recovery_dtbo_unchanged", "yes"),
         ("kernel_cmdline_unchanged", "yes"),
-        ("boot_header_unchanged_except_ramdisk_size", "yes"),
+        (
+            "boot_header_unchanged_except_ramdisk_size_and_recovery_dtbo_offset",
+            "yes",
+        ),
         ("recovery_size_exact", "yes"),
         ("rootfs_persistent_delta", "none"),
         ("phone_partition_writes", "no"),
