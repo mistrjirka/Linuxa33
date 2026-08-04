@@ -131,7 +131,65 @@ with tempfile.TemporaryDirectory() as temp:
         check=False,
     )
     assert wrong.returncode == 2
-    assert f'{fixed.RUNTIME_DIR}/tools' in fixed.TWRP_FUNCTION_TEST
+
+    # Execute the generated runtime script instead of asserting on its source
+    # text. This verifies that the runtime_dir argument really controls PATH,
+    # that the shim is discovered, and that both root lookup API modes work.
+    runtime_dir = root / "simulated-twrp-runtime"
+    tools = runtime_dir / "tools"
+    tools.mkdir(parents=True)
+    simulated_blkid = tools / "blkid"
+    simulated_blkid.write_text(fixed.build_blkid_shim(root_uuid), encoding="utf-8")
+    simulated_blkid.chmod(0o755)
+
+    function_file = root / "simulated-find-root.sh"
+    function_file.write_text(
+        r'''find_root_partition() {
+    a33x_root=/dev/block/sda36
+    a33x_identity="$(blkid "$a33x_root" 2>/dev/null || true)"
+    case "$a33x_identity" in
+        *'TYPE="ext4"'*) ;;
+        *) unset a33x_root a33x_identity; return 0 ;;
+    esac
+    case "$a33x_identity" in
+        *'LABEL="pmOS_root"'*) ;;
+        *) unset a33x_root a33x_identity; return 0 ;;
+    esac
+    case "$#" in
+        0) printf '%s\n' "$a33x_root" ;;
+        1)
+            [ "$1" = partition ] || return 2
+            partition="$a33x_root"
+            ;;
+        *) return 2 ;;
+    esac
+    unset a33x_root a33x_identity
+}
+''',
+        encoding="utf-8",
+    )
+    generated_runtime_test = root / "generated-runtime-test.sh"
+    generated_runtime_test.write_text(fixed.TWRP_FUNCTION_TEST, encoding="utf-8")
+    executed = subprocess.run(
+        [
+            "sh",
+            str(generated_runtime_test),
+            str(function_file),
+            str(runtime_dir),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert executed.returncode == 0, (
+        f"generated TWRP runtime test failed\nstdout:\n{executed.stdout}\n"
+        f"stderr:\n{executed.stderr}"
+    )
+    assert f"blkid_command={simulated_blkid}" in executed.stdout
+    assert "stdout_value=/dev/block/sda36" in executed.stdout
+    assert "output_variable_value=/dev/block/sda36" in executed.stdout
+    assert "exact_u0j_dual_api_runtime=passed" in executed.stdout
 
     try:
         fixed.build_blkid_shim("not-a-uuid")
@@ -162,5 +220,6 @@ print("runtime_upload_plan=passed")
 print("missing_runtime_upload_refusal=passed")
 print("superblock_bound_blkid_shim=passed")
 print("blkid_shim_wrong_target_refusal=passed")
+print("generated_twrp_runtime_execution=passed")
 print("invalid_blkid_shim_uuid_refusal=passed")
 print("mismatching_hash_refusal=passed")
