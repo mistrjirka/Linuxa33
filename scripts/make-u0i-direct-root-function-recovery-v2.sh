@@ -29,17 +29,19 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 
-old = '''patterns = [
+old = '''assignment_patterns = [
     re.compile(r"(?:^|[;\\n])\\s*(?:local\\s+|export\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*[\\"']?\\$\\(\\s*find_root_partition\\s*\\)[\\"']?"),
     re.compile(r"(?:^|[;\\n])\\s*(?:local\\s+|export\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*[\\"']?`\\s*find_root_partition\\s*`[\\"']?"),
 ]
 assigned = []
-for pattern in patterns:
+for pattern in assignment_patterns:
     assigned.extend(pattern.findall(wait_text))
 assigned = sorted(set(assigned))
 if len(assigned) != 1:
     raise SystemExit(f"expected one wait_root_partition assignment from find_root_partition, found {assigned}")
 root_variable = assigned[0]
+if root_variable not in wait_text:
+    raise SystemExit("captured root variable is not used by wait_root_partition")
 '''
 
 new = '''substitutions = len(re.findall(r"\\$\\(\\s*find_root_partition\\s*\\)|`\\s*find_root_partition\\s*`", wait_text))
@@ -73,6 +75,8 @@ if text.count(old_report) != 1:
 
 text = text.replace(old, new, 1)
 text = text.replace(old_report, new_report, 1)
+if "root_variable" in text:
+    raise SystemExit("stale root_variable reference remained after validator patch")
 path.write_text(text, encoding="utf-8")
 PY
 
