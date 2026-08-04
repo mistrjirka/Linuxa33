@@ -16,7 +16,10 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 fixture = f'''#!/bin/sh
-{module.ANCHOR}printf '<6>a33x-u0k-direct-mount: stage=cleanup-hooks-begin\\n' > /dev/kmsg 2>/dev/null || true
+printf '<6>a33x-u0k-direct-mount: stage=skip-legacy-boot-mount\\n' > /dev/kmsg 2>/dev/null || true
+printf '<6>a33x-u0k-direct-mount: stage=cleanup-hooks-begin\\n' > /dev/kmsg 2>/dev/null || true
+run_hooks /hooks-cleanup
+{module.ANCHOR}printf '<6>a33x-u0k-direct-mount: stage=switch-root-begin\\n' > /dev/kmsg 2>/dev/null || true
 exec switch_root /sysroot "$init"
 '''
 patched = module.patch_init_second(fixture)
@@ -29,8 +32,10 @@ assert "sed -i" not in patched
 assert 'rm "$OPENRC_CGROUP_SH"' not in patched
 assert 'cp /dev/null "$OPENRC_CGROUP_SH"' not in patched
 assert '> "$OPENRC_CGROUP_SH"' not in patched
-assert patched.index("stage=mask-success") < patched.index("stage=cleanup-hooks-begin")
-assert patched.index("stage=cleanup-hooks-begin") < patched.index("exec switch_root")
+assert patched.index("stage=cleanup-hooks-begin") < patched.index("stage=cleanup-hooks-done")
+assert patched.index("stage=cleanup-hooks-done") < patched.index("stage=mask-begin")
+assert patched.index("stage=mask-success") < patched.index("stage=switch-root-begin")
+assert patched.index("stage=switch-root-begin") < patched.index("exec switch_root")
 
 with tempfile.TemporaryDirectory() as temp:
     path = Path(temp) / "init_2nd.sh"
@@ -57,10 +62,10 @@ assert module.EXPECTED_ROOTFS_SHA256 == (
 assert module.EXPECTED_OPENRC_VERSION == "0.63.2-r0"
 
 print("a33_u0l_openrc_cgroup_isolation_self_test=passed")
-print("exact_u0k_anchor_patch=passed")
+print("exact_u0k_post_cleanup_anchor_patch=passed")
 print("runtime_bind_mask_contract=passed")
 print("persistent_rootfs_write_refusal=passed")
-print("mask_before_switch_root_order=passed")
+print("cleanup_then_mask_then_switch_root_order=passed")
 print("shell_syntax_validation=passed")
 print("missing_duplicate_anchor_refusal=passed")
 print("preexisting_marker_refusal=passed")
