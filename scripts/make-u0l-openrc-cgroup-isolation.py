@@ -46,7 +46,7 @@ openrc_inspector = load("a33_u0l_openrc_inspector", OPENRC_INSPECTOR)
 v2 = u0k.v2
 
 ANCHOR = (
-    "printf '<6>a33x-u0k-direct-mount: stage=skip-legacy-boot-mount\\n' "
+    "printf '<6>a33x-u0k-direct-mount: stage=cleanup-hooks-done\\n' "
     "> /dev/kmsg 2>/dev/null || true\n"
 )
 MASK_BLOCK = r'''OPENRC_CGROUP_SH=/sysroot/usr/libexec/rc/sh/rc-cgroup.sh
@@ -88,7 +88,7 @@ def refuse(message: str) -> None:
 
 def patch_init_second(text: str) -> str:
     if text.count(ANCHOR) != 1:
-        refuse("U0k mask insertion anchor does not occur exactly once")
+        refuse("U0k post-cleanup insertion anchor does not occur exactly once")
     if MARKER_PREFIX in text:
         refuse("U0l marker already exists in base init_2nd.sh")
     patched = text.replace(ANCHOR, ANCHOR + MASK_BLOCK)
@@ -102,14 +102,16 @@ def patch_init_second(text: str) -> str:
             refuse(f"U0l marker is missing or duplicated: {token}")
     order = (
         patched.index("a33x-u0k-direct-mount: stage=skip-legacy-boot-mount"),
+        patched.index("a33x-u0k-direct-mount: stage=cleanup-hooks-begin"),
+        patched.index("a33x-u0k-direct-mount: stage=cleanup-hooks-done"),
         patched.index(f"{MARKER_PREFIX}: stage=mask-begin"),
         patched.index('mount -o bind /dev/null "$OPENRC_CGROUP_SH"'),
         patched.index(f"{MARKER_PREFIX}: stage=mask-success"),
-        patched.index("a33x-u0k-direct-mount: stage=cleanup-hooks-begin"),
+        patched.index("a33x-u0k-direct-mount: stage=switch-root-begin"),
         patched.index('exec switch_root /sysroot "$init"'),
     )
     if tuple(sorted(order)) != order:
-        refuse("U0l bind-mask is not ordered between root mount and switch_root")
+        refuse("U0l bind-mask is not ordered after cleanup and before switch_root")
     forbidden = (
         'rm "$OPENRC_CGROUP_SH"',
         'cp /dev/null "$OPENRC_CGROUP_SH"',
@@ -159,7 +161,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Build U0l from exact U0k by bind-masking OpenRC rc-cgroup.sh "
-            "at runtime before switch_root"
+            "at runtime after cleanup and before switch_root"
         )
     )
     parser.add_argument("--root", type=Path, default=Path.home() / "a33-port")
@@ -253,7 +255,7 @@ def main() -> int:
         ("cpio_entry_count", len(base.entries)),
         ("cpio_entry_order_preserved", "yes"),
         ("cpio_payload_delta", TARGET),
-        ("shell_delta", "runtime-bind-mask-openrc-rc-cgroup-before-switch-root"),
+        ("shell_delta", "runtime-bind-mask-openrc-rc-cgroup-after-cleanup-before-switch-root"),
         ("rootfs_persistent_delta", "none"),
         ("runtime_mount_delta", "bind-/dev/null-over-/usr/libexec/rc/sh/rc-cgroup.sh"),
         ("openrc_cgroup_target", OPENRC_CGROUP_PATH.as_posix()),
