@@ -9,6 +9,15 @@ class BusyBoxResolutionError(RuntimeError):
     pass
 
 
+RUNTIME_DIR = "/tmp/a33-u0j-runtime"
+RUNTIME_REMOTE_NAMES = {
+    "busybox": f"{RUNTIME_DIR}/busybox",
+    "busybox-extras": f"{RUNTIME_DIR}/busybox-extras",
+    "find-root": f"{RUNTIME_DIR}/find_root_partition.sh",
+    "runtime-test": f"{RUNTIME_DIR}/runtime-test.sh",
+}
+
+
 def _sha_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -98,3 +107,36 @@ def resolve_verified_busyboxes(
         )
 
     return binaries, evidence
+
+
+def build_runtime_upload_plan(
+    *,
+    binaries: dict[str, Path],
+    find_root_script: Path,
+    runtime_test_script: Path,
+) -> tuple[tuple[Path, str], ...]:
+    """Return an exact, fail-closed local-to-remote upload plan.
+
+    The runtime test requires both resolved BusyBox binaries plus the exact U0j
+    function and its test script. Reject extra/missing keys so a resolver naming
+    mismatch cannot silently skip an upload again.
+    """
+
+    if set(binaries) != {"busybox", "busybox-extras"}:
+        raise BusyBoxResolutionError(
+            "runtime BusyBox keys differ from the required set: "
+            f"actual={sorted(binaries)}"
+        )
+    local_paths = {
+        "busybox": binaries["busybox"],
+        "busybox-extras": binaries["busybox-extras"],
+        "find-root": find_root_script,
+        "runtime-test": runtime_test_script,
+    }
+    plan: list[tuple[Path, str]] = []
+    for key in ("busybox", "busybox-extras", "find-root", "runtime-test"):
+        local = local_paths[key]
+        if not local.is_file() or local.stat().st_size <= 0:
+            raise BusyBoxResolutionError(f"runtime upload input is missing or empty: {local}")
+        plan.append((local, RUNTIME_REMOTE_NAMES[key]))
+    return tuple(plan)
