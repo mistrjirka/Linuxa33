@@ -72,9 +72,8 @@ with tempfile.TemporaryDirectory() as temp:
     second = result_root / f"{module.PROFILE.output_prefix}-2"
     first.mkdir()
     second.mkdir()
-    first.touch()
-    second.touch()
-    assert module.latest_observation(result_root) in {first, second}
+    latest = module.latest_observation(result_root)
+    assert latest in {first, second}
 
 module.PROFILE.validate()
 assert module.OUTPUT_PREFIX == "u0l-openrc-cgroup-isolation-result"
