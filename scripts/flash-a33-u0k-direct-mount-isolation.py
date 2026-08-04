@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -101,6 +102,10 @@ def require_sha(value: str, label: str) -> None:
         common.refuse(f"invalid SHA256 in U0k {label}: {value!r}")
 
 
+def sha_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def validate_local(root: Path, repo: Path) -> dict[str, object]:
     # Reuse the deployed-rootfs, U0h, U0i and U0j artifact validation. This is
     # local-only; it does not require U0j to be flashed on the phone.
@@ -187,9 +192,9 @@ def validate_local(root: Path, repo: Path) -> dict[str, object]:
     expected_init2 = u0k_builder.patch_second_stage(original_init2)
     if actual_init2 != expected_init2:
         common.refuse("U0k init_2nd.sh is not the exact checked-in patch of U0j")
-    if common.sha_bytes(original_init2.encode()) != patch.get("original_init_2nd_sha256"):
+    if sha_bytes(original_init2.encode()) != patch.get("original_init_2nd_sha256"):
         common.refuse("U0k original init_2nd SHA differs from patch report")
-    if common.sha_bytes(actual_init2.encode()) != patch.get("patched_init_2nd_sha256"):
+    if sha_bytes(actual_init2.encode()) != patch.get("patched_init_2nd_sha256"):
         common.refuse("U0k patched init_2nd SHA differs from patch report")
     if u0k_builder.v2.count_modules(before) != 67 or u0k_builder.v2.count_modules(after) != 67:
         common.refuse("U0k module count changed or is not 67")
