@@ -50,11 +50,33 @@ with tempfile.TemporaryDirectory() as temp:
     else:
         raise AssertionError("missing ramdisk delta was accepted")
 
+u0k_info = """boot magic: ANDROID!
+kernel size: 1234
+ramdisk size: 456
+command line args: console=ttySAC2 init=/sbin/init
+header version: 2
+"""
+u0l_info = """boot magic: ANDROID!
+kernel size: 1234
+ramdisk size: 789
+command line args: console=ttySAC2 init=/sbin/init
+header version: 2
+"""
+assert module.normalize_boot_info(u0k_info) == module.normalize_boot_info(u0l_info)
+changed_cmdline = u0l_info.replace("init=/sbin/init", "init=/bin/sh")
+assert module.normalize_boot_info(u0k_info) != module.normalize_boot_info(changed_cmdline)
+changed_kernel = u0l_info.replace("kernel size: 1234", "kernel size: 1235")
+assert module.normalize_boot_info(u0k_info) != module.normalize_boot_info(changed_kernel)
+
 assert module.EXPECTED_U0L_BUILDER_BLOB == "c976721153b43e4507478597bb6680972b4cc8dc"
 assert module.COMPONENTS_UNCHANGED == ("kernel", "dtb", "recovery_dtbo")
+assert module.IGNORED_BOOT_INFO_PREFIXES == ("ramdisk size:", "ramdisk_size:")
 
 print("a33_u0l_candidate_audit_self_test=passed")
 print("unchanged_kernel_dtb_recovery_dtbo_contract=passed")
 print("changed_ramdisk_required=passed")
 print("unexpected_component_delta_refusal=passed")
+print("ramdisk_size_only_normalization=passed")
+print("command_line_change_refusal=passed")
+print("kernel_header_change_refusal=passed")
 print("u0l_builder_identity_pinned=passed")
