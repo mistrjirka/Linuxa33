@@ -17,43 +17,81 @@ spec.loader.exec_module(module)
 assert module.PACKAGE_KREL != module.EXPECTED_MODULE_VERMAGIC
 assert module.normalize_module("kernel/sched/ems.ko") == "ems"
 assert module.normalize_module("foo-bar.ko.xz") == "foo_bar"
+assert module.parse_modinfo_depends("") == ()
+assert module.parse_modinfo_depends("cmupmucal, ect_parser") == (
+    "cmupmucal",
+    "ect_parser",
+)
 
 with tempfile.TemporaryDirectory() as temp:
     root = Path(temp)
     modules_dep = root / "modules.dep"
+    # modules.dep is deliberately a load closure: usb lists both its direct
+    # dependency and that dependency's EMS closure. It must not be used as the
+    # direct graph.
     modules_dep.write_text(
         "kernel/ems.ko: kernel/cmupmucal.ko kernel/ect_parser.ko\n"
         "kernel/cmupmucal.ko:\n"
         "kernel/ect_parser.ko:\n"
-        "kernel/exynos-dm.ko: kernel/ems.ko\n"
-        "kernel/usb.ko: kernel/exynos-dm.ko\n"
+        "kernel/exynos-dm.ko: kernel/ems.ko kernel/cmupmucal.ko kernel/ect_parser.ko\n"
+        "kernel/usb.ko: kernel/exynos-dm.ko kernel/ems.ko kernel/cmupmucal.ko kernel/ect_parser.ko\n"
         "kernel/independent.ko:\n",
         encoding="utf-8",
     )
-    dependencies = module.parse_modules_dep(modules_dep)
-    aliases = module.build_aliases(dependencies)
+    closure = module.parse_modules_dep(modules_dep)
+    aliases = module.build_aliases(closure)
+    direct = module.build_direct_dependency_graph_from_fields(
+        {
+            "kernel/ems.ko": "cmupmucal,ect_parser",
+            "kernel/cmupmucal.ko": "",
+            "kernel/ect_parser.ko": "",
+            "kernel/exynos-dm.ko": "ems",
+            "kernel/usb.ko": "exynos_dm",
+            "kernel/independent.ko": "",
+        },
+        aliases,
+    )
     target = module.resolve_module("ems", aliases)
     usb = module.resolve_module("usb", aliases)
     independent = module.resolve_module("independent", aliases)
 
     assert target == "kernel/ems.ko"
-    assert dependencies[target] == (
+    assert closure[usb] == (
+        "kernel/exynos-dm.ko",
+        "kernel/ems.ko",
         "kernel/cmupmucal.ko",
         "kernel/ect_parser.ko",
     )
-    assert module.dependency_path(dependencies, usb, target) == (
+    assert direct[target] == (
+        "kernel/cmupmucal.ko",
+        "kernel/ect_parser.ko",
+    )
+    assert direct[usb] == ("kernel/exynos-dm.ko",)
+    assert module.dependency_path(direct, usb, target) == (
         "kernel/usb.ko",
         "kernel/exynos-dm.ko",
         "kernel/ems.ko",
     )
-    assert module.dependency_path(dependencies, independent, target) is None
-    assert module.reverse_dependencies(dependencies, target) == [
+    assert module.dependency_path(direct, independent, target) is None
+    assert module.reverse_direct_dependencies(direct, target) == [
+        "kernel/exynos-dm.ko",
+    ]
+    assert module.reverse_dependencies(direct, target) == [
         "kernel/exynos-dm.ko",
         "kernel/usb.ko",
     ]
     assert module.format_path((usb, "kernel/exynos-dm.ko", target)) == (
         "usb -> exynos_dm -> ems"
     )
+
+    try:
+        module.build_direct_dependency_graph_from_fields(
+            {"kernel/usb.ko": "missing-module"}, aliases
+        )
+    except module.InspectionError:
+        pass
+    else:
+        raise AssertionError("unresolved direct modinfo dependency was accepted")
 
     classification, action = module.classify_omission(
         target_selected=True,
@@ -104,9 +142,12 @@ with tempfile.TemporaryDirectory() as temp:
 
 print("a33_ems_inspection_self_test=passed")
 print("package_label_module_abi_distinction=passed")
-print("declared_dependency_set=passed")
-print("transitive_dependency_path=passed")
-print("reverse_dependency_set=passed")
+print("modules_dep_load_closure_distinction=passed")
+print("modinfo_direct_dependency_graph=passed")
+print("exact_transitive_dependency_path=passed")
+print("direct_reverse_dependency_set=passed")
+print("transitive_reverse_dependency_set=passed")
+print("unresolved_direct_dependency_refusal=passed")
 print("independent_omission_classification=passed")
 print("dependent_closure_classification=passed")
 print("rootfs_autoload_reference_scan=passed")
