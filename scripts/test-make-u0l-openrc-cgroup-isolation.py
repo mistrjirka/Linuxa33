@@ -26,8 +26,11 @@ patched = module.patch_init_second(fixture)
 assert patched.startswith("#!/bin/sh\n")
 assert patched.count(module.ANCHOR) == 1
 assert patched.count('mount -o bind /dev/null "$OPENRC_CGROUP_SH"') == 1
+assert patched.count('if [ ! -f "$OPENRC_CGROUP_SH" ]; then') == 1
+assert patched.count('grep -q " $OPENRC_CGROUP_SH " /proc/self/mountinfo') == 1
 assert patched.count("/sysroot/usr/libexec/rc/sh/rc-cgroup.sh") == 1
 assert patched.count("while true; do sleep 3600; done") == 3
+assert "\\\"$OPENRC_CGROUP_SH\\\"" not in patched
 assert "sed -i" not in patched
 assert 'rm "$OPENRC_CGROUP_SH"' not in patched
 assert 'cp /dev/null "$OPENRC_CGROUP_SH"' not in patched
@@ -54,8 +57,10 @@ for bad in (
     else:
         raise AssertionError("unsafe U0l fixture was accepted")
 
-for snippet in module.REQUIRED_OPENRC_SNIPPETS:
-    assert snippet
+expected_counts = dict(module.REQUIRED_OPENRC_SNIPPETS)
+assert expected_counts["cgroup_add_service()"] == 1
+assert expected_counts['rc_cgroup_path="${cgroup_path}/openrc.${RC_SVCNAME}"'] == 3
+assert expected_counts['printf 0 > "${rc_cgroup_path}"/cgroup.procs'] == 1
 assert module.EXPECTED_ROOTFS_SHA256 == (
     "79c94efe41da14e72e82cfc66c8e6fac6f04482fa2ea2af024f6b1ebb67d3951"
 )
@@ -64,9 +69,11 @@ assert module.EXPECTED_OPENRC_VERSION == "0.63.2-r0"
 print("a33_u0l_openrc_cgroup_isolation_self_test=passed")
 print("exact_u0k_post_cleanup_anchor_patch=passed")
 print("runtime_bind_mask_contract=passed")
+print("generated_shell_quoting=passed")
 print("persistent_rootfs_write_refusal=passed")
 print("cleanup_then_mask_then_switch_root_order=passed")
 print("shell_syntax_validation=passed")
 print("missing_duplicate_anchor_refusal=passed")
 print("preexisting_marker_refusal=passed")
+print("openrc_contract_counts=passed")
 print("rootfs_and_openrc_identity_pinned=passed")
