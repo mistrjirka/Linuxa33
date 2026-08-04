@@ -42,10 +42,14 @@ verify_sha() {
     fi
 }
 
-[[ "$(value "$U0H_REPORT" preparation_status)" = passed ]] || {
-    echo "REFUSING U0h: preparation report did not pass" >&2
+if [[ "$(value "$U0H_REPORT" preparation_status)" != passed || \
+      "$(value "$U0H_REPORT" hook_order_validation)" != passed || \
+      "$(value "$U0H_REPORT" hook_before_root_discovery)" != yes || \
+      "$(value "$U0H_REPORT" root_handoff_runtime_tools)" != passed ]]; then
+    echo "REFUSING U0h: preparation or root-handoff ordering report did not pass" >&2
+    cat "$U0H_REPORT" >&2
     exit 1
-}
+fi
 verify_sha initramfs "$INITRAMFS" "$(value "$U0H_REPORT" initramfs_sha256)"
 
 EXTRACT="$(mktemp -d)"
