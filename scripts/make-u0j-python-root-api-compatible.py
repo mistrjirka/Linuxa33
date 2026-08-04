@@ -97,6 +97,30 @@ def classify_find_root_calls(texts: dict[str, str]) -> list[tuple[str, int, str,
     return calls
 
 
+def validate_output_variable_consumers(texts: dict[str, str]) -> list[str]:
+    expected = {
+        "resize_root_partition": "init_functions_2nd.sh",
+        "resize_root_filesystem": "init_functions_2nd.sh",
+        "mount_root_partition": "init_functions.sh",
+    }
+    validated: list[str] = []
+    for function, path in expected.items():
+        text = texts.get(path)
+        if text is None:
+            refuse(f"missing shell file for output-variable consumer: {path}")
+        body = v2.function_span(text, function)[2]
+        call_pos = body.find("find_root_partition partition")
+        local_pos = body.find("local partition")
+        if call_pos < 0:
+            refuse(f"{function} does not call find_root_partition partition")
+        if local_pos < 0 or local_pos >= call_pos:
+            refuse(f"{function} does not declare local partition before root lookup")
+        if body.count("find_root_partition partition") != 1:
+            refuse(f"{function} has an ambiguous number of output-variable root lookups")
+        validated.append(f"{path}:{function}")
+    return validated
+
+
 def compatible_find_replacement() -> str:
     return f'''find_root_partition() {{
 \t# A33 U0j: hook 05 creates and verifies this exact userdata node.
@@ -238,7 +262,9 @@ def main() -> int:
     functions = functions_entry.data.decode("utf-8", "strict")
     init2 = init2_entry.data.decode("utf-8", "strict")
     ordered = v2.second_stage_calls(init2)
-    calls = classify_find_root_calls(shell_texts(base))
+    texts = shell_texts(base)
+    calls = classify_find_root_calls(texts)
+    consumers = validate_output_variable_consumers(texts)
     patched_functions, original_find, original_wait, replacement = patch_find_only(functions)
 
     inspect.mkdir(parents=True, exist_ok=True)
@@ -301,6 +327,8 @@ def main() -> int:
         ("find_root_output_variable_api", "partition"),
         ("find_root_stdout_call_count", stdout_calls),
         ("find_root_output_variable_call_count", variable_calls),
+        ("find_root_output_variable_consumers", ",".join(consumers)),
+        ("caller_local_partition_contract", "passed"),
         ("original_init_functions_sha256", v2.sha_bytes(functions_entry.data)),
         ("patched_init_functions_sha256", v2.sha_bytes(patched_functions.encode())),
         ("original_find_root_sha256", v2.sha_bytes(original_find.encode())),
@@ -349,6 +377,8 @@ def main() -> int:
         ("wait_root_function_preserved", "yes"),
         ("find_root_stdout_api", "passed"),
         ("find_root_output_variable_api", "partition"),
+        ("find_root_output_variable_consumers", ",".join(consumers)),
+        ("caller_local_partition_contract", "passed"),
         ("embedded_modules", MODULES),
         ("direct_root_identity_recheck", "yes"),
         ("second_stage_order_validation", "passed"),
