@@ -220,6 +220,50 @@ for token in find_root_partition pmOS_root wait_root_partition mount_root_partit
     }
 done
 
+HOOK_ORDER_RESULT="$(
+    python3 - "$EXTRACT/init_2nd.sh" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+lines = Path(sys.argv[1]).read_text(errors="replace").splitlines()
+
+def first_executable(pattern):
+    for number, raw in enumerate(lines, 1):
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if pattern.search(stripped):
+            return number, stripped
+    return None
+
+hooks = first_executable(re.compile(
+    r"(?:^|[;&|()]|\bthen\b|\bdo\b)\s*run_hooks\s+[\"']?/hooks[\"']?(?=$|[\s;&|)])"
+))
+wait = first_executable(re.compile(
+    r"(?:^|[;&|()]|\bthen\b|\bdo\b)\s*wait_root_partition(?=$|[\s;&|)])"
+))
+if hooks is None:
+    raise SystemExit("init_2nd.sh has no executable run_hooks /hooks call")
+if wait is None:
+    raise SystemExit("init_2nd.sh has no executable wait_root_partition call")
+if hooks[0] >= wait[0]:
+    raise SystemExit(
+        f"run_hooks /hooks is not before root discovery: hooks={hooks[0]} wait={wait[0]}"
+    )
+print(f"run_hooks_line={hooks[0]}")
+print(f"run_hooks_text={hooks[1]}")
+print(f"wait_root_partition_line={wait[0]}")
+print(f"wait_root_partition_text={wait[1]}")
+print("hook_before_root_discovery=yes")
+PY
+)"
+printf '%s\n' "$HOOK_ORDER_RESULT"
+[[ "$(awk -F= '$1=="hook_before_root_discovery" {print $2; exit}' <<<"$HOOK_ORDER_RESULT")" = yes ]] || {
+    echo "REFUSING U0h: hook execution is not proven before root discovery" >&2
+    exit 1
+}
+
 INITRAMFS_SHA="$(sha256sum "$INITRAMFS" | awk '{print $1}')"
 HOOK_SHA="$(sha256sum "$HOOK_SOURCE" | awk '{print $1}')"
 {
@@ -239,6 +283,8 @@ HOOK_SHA="$(sha256sum "$HOOK_SOURCE" | awk '{print $1}')"
     echo "initramfs=$INITRAMFS"
     echo "initramfs_sha256=$INITRAMFS_SHA"
     echo "root_handoff_runtime_tools=passed"
+    printf '%s\n' "$HOOK_ORDER_RESULT"
+    echo "hook_order_validation=passed"
     echo "preparation_status=passed"
     echo "phone_partition_writes=no"
 } | tee "$REPORT"
