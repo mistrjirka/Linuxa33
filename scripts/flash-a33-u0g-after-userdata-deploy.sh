@@ -8,6 +8,9 @@ export LANG=C
 
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 ADB="${ADB:-adb}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 DEPLOY_REPORT="${DEPLOY_REPORT:-$PORT_ROOT/build/a33-userdata-rootfs-deployment.txt}"
 CANDIDATE="${CANDIDATE:-$PORT_ROOT/build/candidates/a33x-h1-usbpd-u0g-muic-dynamic-recovery.img}"
 REPORT="$PORT_ROOT/build/a33-first-rootfs-u0g-flash.txt"
@@ -73,9 +76,7 @@ fi
 mkdir -p "$PORT_ROOT/build"
 
 echo "=== Wait for exact known-good TWRP ==="
-until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
-    sleep 1
-done
+a33_init_recovery_adb 30
 
 LIVE="$(
     "$ADB" shell sh -s -- "$USERDATA" 2>/dev/null <<'SH' | tr -d '\r'
@@ -85,9 +86,6 @@ resolved="$(readlink -f "$target")"
 echo "recovery_sha=$(sha256sum /dev/block/by-name/recovery | awk 'NR==1 {print $1}')"
 echo "userdata_resolved=$resolved"
 echo "userdata_readonly=$(blockdev --getro "$target" 2>/dev/null || true)"
-echo "userdata_type=$(blkid -s TYPE -o value "$target" 2>/dev/null || true)"
-echo "userdata_label=$(blkid -s LABEL -o value "$target" 2>/dev/null || true)"
-echo "userdata_uuid=$(blkid -s UUID -o value "$target" 2>/dev/null || true)"
 echo "mount_users_begin"
 awk '{print $1, $2}' /proc/mounts | while read -r source mountpoint; do
     source_resolved="$(readlink -f "$source" 2>/dev/null || true)"
@@ -116,6 +114,10 @@ done
 echo "dm_users_end"
 SH
 )"
+USERDATA_IDENTITY="$(a33_ext4_identity "$USERDATA")"
+LIVE="${LIVE}"$'\n'"userdata_type=$(awk -F= '$1=="type" {print $2; exit}' <<<"$USERDATA_IDENTITY")"
+LIVE="${LIVE}"$'\n'"userdata_label=$(awk -F= '$1=="label" {print $2; exit}' <<<"$USERDATA_IDENTITY")"
+LIVE="${LIVE}"$'\n'"userdata_uuid=$(awk -F= '$1=="uuid" {print $2; exit}' <<<"$USERDATA_IDENTITY")"
 
 live_value() {
     local key="$1"

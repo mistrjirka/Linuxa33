@@ -8,6 +8,9 @@ export LANG=C
 
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 ADB="${ADB:-adb}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 FLASH_REPORT="${FLASH_REPORT:-$PORT_ROOT/build/a33-first-rootfs-u0g-flash.txt}"
 RESULT_ROOT="${RESULT_ROOT:-$PORT_ROOT/build/runtime-results}"
 PHONE_IP="${PHONE_IP:-172.16.42.1}"
@@ -78,9 +81,7 @@ mkdir -p "$OUT"
     echo "reboot_target=recovery"
 } | tee "$OUT/manifest.txt"
 
-until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
-    sleep 1
-done
+a33_init_recovery_adb 30
 
 PREBOOT="$(
     "$ADB" shell sh -s -- "$ROOT_UUID" 2>/dev/null <<'SH' | tr -d '\r'
@@ -91,9 +92,6 @@ resolved="$(readlink -f "$target")"
 echo "recovery_sha=$(sha256sum /dev/block/by-name/recovery | awk 'NR==1 {print $1}')"
 echo "root_resolved=$resolved"
 echo "root_readonly=$(blockdev --getro "$target" 2>/dev/null || true)"
-echo "root_type=$(blkid -s TYPE -o value "$target" 2>/dev/null || true)"
-echo "root_label=$(blkid -s LABEL -o value "$target" 2>/dev/null || true)"
-echo "root_uuid=$(blkid -s UUID -o value "$target" 2>/dev/null || true)"
 echo "mount_users_begin"
 awk '{print $1, $2}' /proc/mounts 2>/dev/null | while read -r source mountpoint; do
     source_resolved="$(readlink -f "$source" 2>/dev/null || true)"
@@ -120,9 +118,12 @@ for dm in /sys/block/dm-*; do
     fi
 done
 echo "dm_users_end"
-[ "$(blkid -s UUID -o value "$target" 2>/dev/null || true)" = "$expected_uuid" ]
 SH
 )"
+ROOT_IDENTITY="$(a33_ext4_identity /dev/block/by-name/userdata)"
+PREBOOT="${PREBOOT}"$'\n'"root_type=$(awk -F= '$1=="type" {print $2; exit}' <<<"$ROOT_IDENTITY")"
+PREBOOT="${PREBOOT}"$'\n'"root_label=$(awk -F= '$1=="label" {print $2; exit}' <<<"$ROOT_IDENTITY")"
+PREBOOT="${PREBOOT}"$'\n'"root_uuid=$(awk -F= '$1=="uuid" {print $2; exit}' <<<"$ROOT_IDENTITY")"
 
 preboot_value() {
     local key="$1"
@@ -200,7 +201,7 @@ for ((second = 0; second <= MAX_SECONDS; second++)); do
             echo "ping=no"
         fi
 
-        if timeout 1 bash -c "exec 3<>/dev/tcp/$PHONE_IP/22" >/dev/null 2>&1; then
+        if a33_tcp_port_open "$PHONE_IP" 22 1 >/dev/null 2>&1; then
             SSH_PORT_OPEN=yes
             echo "ssh_port_22=yes"
         else
@@ -211,7 +212,8 @@ for ((second = 0; second <= MAX_SECONDS; second++)); do
         ip route 2>&1 || true
     } >> "$OUT/observation-loop.txt"
 
-    if [[ "$PING_OK" == yes && "$SSH_PORT_OPEN" == yes ]]; then
+    if [[ "$USB_ENUM" == yes && "$HOST_INTERFACE" == yes &&
+          "$PING_OK" == yes && "$SSH_PORT_OPEN" == yes ]]; then
         SUCCESS_SECOND="$second"
         break
     fi
@@ -238,7 +240,8 @@ if command -v journalctl >/dev/null 2>&1; then
 fi
 
 OBSERVATION_STATUS=failed-no-ssh
-if [[ "$PING_OK" == yes && "$SSH_PORT_OPEN" == yes ]]; then
+if [[ "$USB_ENUM" == yes && "$HOST_INTERFACE" == yes &&
+      "$PING_OK" == yes && "$SSH_PORT_OPEN" == yes ]]; then
     OBSERVATION_STATUS=passed-rootfs-network-and-ssh-ready
 fi
 

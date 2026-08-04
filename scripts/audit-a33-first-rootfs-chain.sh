@@ -9,6 +9,9 @@ export LANG=C
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 ADB="${ADB:-adb}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 IMAGE_LINK="$PORT_ROOT/build/userdata-rootfs-images/current/a33x-userdata-pmos-root.img"
 IMAGE_MANIFEST_LINK="$PORT_ROOT/build/userdata-rootfs-images/current/manifest.txt"
@@ -21,6 +24,7 @@ EXPECTED_USERDATA_RESOLVED="/dev/block/sda36"
 EXPECTED_USERDATA_BYTES="114240258048"
 
 SCRIPTS=(
+    lib/a33-adb-runtime.sh
     verify-a33-u0g-unified-root-handoff.sh
     prepare-a33-userdata-rootfs-image.sh
     backup-a33-before-userdata-repurpose.sh
@@ -167,9 +171,7 @@ fi
 PREFLIGHT_MANIFEST_SHA="$(sha256sum "$PREFLIGHT_MANIFEST" | awk '{print $1}')"
 PREFLIGHT_SUMS_SHA="$(sha256sum "$PREFLIGHT_SUMS" | awk '{print $1}')"
 
-until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
-    sleep 1
-done
+a33_init_recovery_adb 30
 LIVE="$(
     "$ADB" shell sh -s 2>/dev/null <<'SH' | tr -d '\r'
 set -u

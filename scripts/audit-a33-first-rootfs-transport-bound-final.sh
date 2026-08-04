@@ -119,6 +119,7 @@ if [[ "$(stat -Lc '%s' "$IMAGE")" != "$(value "$TRANSPORT_REPORT" userdata_image
 fi
 
 SCRIPTS=(
+    lib/a33-adb-runtime.sh
     audit-a33-command-capabilities.sh
     stage-a33-userdata-rootfs-in-twrp.sh
     deploy-a33-rootfs-to-userdata.sh
@@ -130,6 +131,7 @@ SCRIPTS=(
     restore-a33-twrp-odin.sh
 )
 KEYS=(
+    adb_runtime_helper_sha256
     command_audit_script_sha256
     stage_script_sha256
     deploy_script_sha256

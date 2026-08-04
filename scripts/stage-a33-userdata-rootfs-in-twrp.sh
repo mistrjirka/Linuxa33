@@ -8,6 +8,9 @@ export LANG=C
 
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 ADB="${ADB:-adb}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 IMAGE_LINK="${IMAGE_LINK:-$PORT_ROOT/build/userdata-rootfs-images/current/a33x-userdata-pmos-root.img}"
 IMAGE_MANIFEST_LINK="${IMAGE_MANIFEST_LINK:-$PORT_ROOT/build/userdata-rootfs-images/current/manifest.txt}"
 REMOTE_IMAGE="${REMOTE_IMAGE:-/tmp/a33x-userdata-pmos-root.img}"
@@ -15,7 +18,12 @@ REPORT="$PORT_ROOT/build/a33-userdata-rootfs-stage.txt"
 KNOWN_TWRP_SHA256="414df197c21de25fc5627cd3a4d8a59011bef0141cfa479560c48aa378d3ad7e"
 TMP_MARGIN_BYTES=$((256 * 1024 * 1024))
 
-for command in "$ADB" readlink sha256sum stat awk grep date mkdir; do
+if [[ "$REMOTE_IMAGE" != /tmp/a33x-userdata-pmos-root.img ]]; then
+    echo "REFUSING: remote staging path must be exact volatile TWRP /tmp path" >&2
+    exit 1
+fi
+
+for command in "$ADB" readlink sha256sum stat awk grep date mkdir python3; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required command: $command" >&2
         exit 1
@@ -48,16 +56,20 @@ fi
 mkdir -p "$PORT_ROOT/build"
 
 echo "=== Wait for exact known-good TWRP ==="
-until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
-    sleep 1
-done
+a33_init_recovery_adb 30
 
 PRECHECK="$(
     "$ADB" shell sh -s -- "$REMOTE_IMAGE" 2>/dev/null <<'SH' | tr -d '\r'
 set -eu
 remote="$1"
 echo "recovery_sha=$(sha256sum /dev/block/by-name/recovery | awk 'NR==1 {print $1}')"
-echo "tmp_mount=$(awk '$2=="/tmp" {print $1 ":" $3 ":" $4; exit}' /proc/mounts 2>/dev/null || true)"
+tmp_line="$(awk '$2=="/tmp" {print; exit}' /proc/mounts 2>/dev/null || true)"
+[ -n "$tmp_line" ]
+set -- $tmp_line
+echo "tmp_source=$1"
+echo "tmp_mountpoint=$2"
+echo "tmp_fstype=$3"
+echo "tmp_options=$4"
 echo "tmp_available_kib=$(df -k /tmp 2>/dev/null | awk 'NR>1 {line=$0} END {print $(NF-2)}')"
 rm -f "$remote"
 [ ! -e "$remote" ]
@@ -71,14 +83,18 @@ precheck_value() {
 }
 
 RECOVERY_SHA="$(precheck_value recovery_sha)"
-TMP_MOUNT="$(precheck_value tmp_mount)"
+TMP_SOURCE="$(precheck_value tmp_source)"
+TMP_MOUNTPOINT="$(precheck_value tmp_mountpoint)"
+TMP_FSTYPE="$(precheck_value tmp_fstype)"
+TMP_OPTIONS="$(precheck_value tmp_options)"
 TMP_AVAILABLE_KIB="$(precheck_value tmp_available_kib)"
 if [[ "$RECOVERY_SHA" != "$KNOWN_TWRP_SHA256" ]]; then
     echo "REFUSING: phone is not running exact known-good TWRP" >&2
     exit 1
 fi
-if [[ -z "$TMP_MOUNT" || ! "$TMP_AVAILABLE_KIB" =~ ^[0-9]+$ ]]; then
-    echo "REFUSING: could not prove TWRP /tmp capacity" >&2
+if [[ "$TMP_MOUNTPOINT" != /tmp || "$TMP_FSTYPE" != tmpfs ||
+      ! "$TMP_AVAILABLE_KIB" =~ ^[0-9]+$ ]]; then
+    echo "REFUSING: could not prove TWRP /tmp is a distinct tmpfs with known capacity" >&2
     printf '%s\n' "$PRECHECK" >&2
     exit 1
 fi
@@ -118,12 +134,22 @@ if [[ "$REMOTE_SIZE" != "$IMAGE_SIZE" || "$REMOTE_SHA" != "$IMAGE_SHA" || "$REMO
 fi
 
 echo "=== Verify full binary reverse transport with adb exec-out ==="
-READBACK_SHA="$(
-    "$ADB" exec-out sh -c "dd if='$REMOTE_IMAGE' bs=1048576 2>/dev/null" \
-    | sha256sum \
-    | awk '{print $1}'
+READBACK_META="$(
+    "$ADB" exec-out sh -c "dd if='$REMOTE_IMAGE' bs=1048576 2>/dev/null" |
+        python3 -c 'import hashlib,sys
+h=hashlib.sha256()
+n=0
+while True:
+    block=sys.stdin.buffer.read(1024*1024)
+    if not block:
+        break
+    n += len(block)
+    h.update(block)
+print(n, h.hexdigest())'
 )"
-if [[ "$READBACK_SHA" != "$IMAGE_SHA" ]]; then
+READBACK_SIZE="$(awk '{print $1}' <<<"$READBACK_META")"
+READBACK_SHA="$(awk '{print $2}' <<<"$READBACK_META")"
+if [[ "$READBACK_SIZE" != "$IMAGE_SIZE" || "$READBACK_SHA" != "$IMAGE_SHA" ]]; then
     "$ADB" shell "rm -f '$REMOTE_IMAGE'" >/dev/null 2>&1 || true
     echo "REFUSING: adb exec-out full-image readback mismatch" >&2
     echo "expected=$IMAGE_SHA actual=$READBACK_SHA" >&2
@@ -141,13 +167,17 @@ fi
     echo "remote_image=$REMOTE_IMAGE"
     echo "remote_size=$REMOTE_SIZE"
     echo "remote_sha256=$REMOTE_SHA"
-    echo "tmp_mount=$TMP_MOUNT"
+    echo "tmp_source=$TMP_SOURCE"
+    echo "tmp_mountpoint=$TMP_MOUNTPOINT"
+    echo "tmp_fstype=$TMP_FSTYPE"
+    echo "tmp_options=$TMP_OPTIONS"
     echo "tmp_available_bytes_before=$TMP_AVAILABLE_BYTES"
     echo "tmp_required_bytes=$TMP_REQUIRED_BYTES"
     echo "adb_transport=push-plus-exec-out"
     echo "adb_exec_in_required=no"
     echo "adb_push_full_image=passed"
     echo "adb_exec_out_full_readback=passed"
+    echo "full_readback_size=$READBACK_SIZE"
     echo "full_readback_sha256=$READBACK_SHA"
     echo "persistent_phone_writes=no"
     echo "volatile_tmpfs_write=yes"

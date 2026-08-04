@@ -12,6 +12,9 @@ RESULT_ROOT="${RESULT_ROOT:-$PORT_ROOT/build/runtime-results}"
 EXPECTED_TWRP_SHA256="414df197c21de25fc5627cd3a4d8a59011bef0141cfa479560c48aa378d3ad7e"
 METADATA_RESULT_RELATIVE="a33x-bringup/u0g-muic-result.txt"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 BASE="$SCRIPT_DIR/collect-a33-previous-boot.sh"
 
 for command in "$ADB" find sort awk grep tar sha256sum cp date; do
@@ -25,9 +28,7 @@ done
     exit 1
 }
 
-until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
-    sleep 1
-done
+a33_init_recovery_adb 30
 RECOVERY_SHA="$("$ADB" shell 'sha256sum /dev/block/by-name/recovery' | awk 'NR==1 {print $1}' | tr -d '\r')"
 if [[ "$RECOVERY_SHA" != "$EXPECTED_TWRP_SHA256" ]]; then
     echo "REFUSING: exact known-good TWRP has not been restored" >&2
@@ -50,8 +51,18 @@ if [[ -z "$OUT" || ! -d "$OUT" ]]; then
     exit 1
 fi
 
-"$ADB" shell sh -s > "$OUT/userdata-rootfs-readonly-check.txt" <<'SH'
+ROOT_IDENTITY="$(a33_ext4_identity /dev/block/by-name/userdata)"
+ROOT_IDENTITY_TYPE="$(awk -F= '$1=="type" {print $2; exit}' <<<"$ROOT_IDENTITY")"
+ROOT_IDENTITY_LABEL="$(awk -F= '$1=="label" {print $2; exit}' <<<"$ROOT_IDENTITY")"
+ROOT_IDENTITY_UUID="$(awk -F= '$1=="uuid" {print $2; exit}' <<<"$ROOT_IDENTITY")"
+
+"$ADB" shell sh -s -- \
+    "$ROOT_IDENTITY_TYPE" "$ROOT_IDENTITY_LABEL" "$ROOT_IDENTITY_UUID" \
+    > "$OUT/userdata-rootfs-readonly-check.txt" <<'SH'
 set -u
+root_type="$1"
+root_label="$2"
+root_uuid="$3"
 target=/dev/block/by-name/userdata
 mountpoint=/tmp/a33x-first-rootfs-failure-check
 resolved="$(readlink -f "$target" 2>/dev/null || true)"
@@ -67,9 +78,9 @@ trap cleanup EXIT
 echo "target=$target"
 echo "resolved=$resolved"
 echo "bytes=$(blockdev --getsize64 "$target" 2>/dev/null || true)"
-echo "type=$(blkid -s TYPE -o value "$target" 2>/dev/null || true)"
-echo "label=$(blkid -s LABEL -o value "$target" 2>/dev/null || true)"
-echo "uuid=$(blkid -s UUID -o value "$target" 2>/dev/null || true)"
+echo "type=$root_type"
+echo "label=$root_label"
+echo "uuid=$root_uuid"
 echo "mount_users_begin"
 awk '{print $1, $2}' /proc/mounts 2>/dev/null | while read -r source mp; do
     source_resolved="$(readlink -f "$source" 2>/dev/null || true)"

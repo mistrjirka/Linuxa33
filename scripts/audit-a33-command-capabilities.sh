@@ -10,6 +10,9 @@ PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 ADB="${ADB:-adb}"
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 ROOT_IMAGE_LINK="$PORT_ROOT/build/userdata-rootfs-images/current/a33x-userdata-pmos-root.img"
 REPORT="$PORT_ROOT/build/a33-command-capabilities.txt"
 DETAILS="$PORT_ROOT/build/a33-command-capabilities-details.txt"
@@ -23,10 +26,11 @@ HOST_REQUIRED=(
 HOST_OPTIONAL=(journalctl shellcheck pv)
 TWRP_REQUIRED=(
     sh awk grep sha256sum stat df rm readlink blockdev tail cat find dd sync
-    blkid mkdir umount mount wc ls uname dmesg getprop tr sed cp
+    mkdir umount mount wc ls uname dmesg getprop tr sed cp
 )
-ADB_ALLOWED=(shell push exec-out reboot)
+ADB_ALLOWED=(devices get-state get-serialno shell push exec-out reboot)
 FUTURE_SCRIPTS=(
+    lib/a33-adb-runtime.sh
     stage-a33-userdata-rootfs-in-twrp.sh
     deploy-a33-rootfs-to-userdata.sh
     execute-a33-first-rootfs-deployment.sh
@@ -118,9 +122,7 @@ ADB_VERSION="$("$ADB" version 2>&1)"
 printf '%s\n' "$ADB_VERSION" | sed 's/^/adb_version_output=/' | tee -a "$DETAILS"
 
 echo "=== Wait for exact known-good TWRP ===" | tee -a "$DETAILS"
-until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
-    sleep 1
-done
+a33_init_recovery_adb 30
 
 REMOTE_CAPABILITY="$(
     "$ADB" shell sh -s -- "${TWRP_REQUIRED[@]}" 2>/dev/null <<'SH' | tr -d '\r'
@@ -165,10 +167,6 @@ dd if=/dev/zero of="$work/dd.bin" bs=4096 count=4 2>/dev/null
 sync
 [ "$(blockdev --getsize64 /dev/block/by-name/recovery)" = 100663296 ]
 [ "$(blockdev --getro /dev/block/by-name/userdata)" = 0 ]
-metadata_type="$(blkid -s TYPE -o value "$metadata" 2>/dev/null || true)"
-[ -n "$metadata_type" ]
-echo "metadata_type=$metadata_type"
-
 resolved_metadata="$(readlink -f "$metadata" 2>/dev/null || true)"
 existing_mount="$(awk -v a="$metadata" -v b="$resolved_metadata" '$1==a || $1==b {print $2; exit}' /proc/mounts 2>/dev/null || true)"
 if [ -n "$existing_mount" ]; then
@@ -191,6 +189,13 @@ echo "twrp_functional_probe=passed"
 SH
 )"
 printf '%s\n' "$REMOTE_CAPABILITY" | tee -a "$DETAILS"
+
+METADATA_IDENTITY="$(a33_ext4_identity /dev/block/by-name/metadata)"
+printf '%s\n' "$METADATA_IDENTITY" | sed 's/^/metadata_identity_/' | tee -a "$DETAILS"
+if [[ "$(printf '%s\n' "$METADATA_IDENTITY" | awk -F= '$1=="type" {print $2; exit}')" != ext4 ]]; then
+    echo "REFUSING: metadata ext4 identity parser did not pass" >&2
+    exit 1
+fi
 
 RECOVERY_SHA="$(printf '%s\n' "$REMOTE_CAPABILITY" | awk -F= '$1=="recovery_sha" {print $2; exit}')"
 if [[ "$RECOVERY_SHA" != "$KNOWN_TWRP_SHA256" || \
@@ -285,6 +290,7 @@ ROOT_AWK="$(root_has_any /usr/bin/awk /bin/awk)" || {
     echo "twrp_required_commands=${TWRP_REQUIRED[*]}"
     echo "twrp_required_commands_status=passed"
     echo "twrp_command_option_probes=passed"
+    echo "twrp_ext4_identity_parser=passed"
     echo "rootfs_required_runtime_commands=passed"
     echo "rootfs_ip_path=$ROOT_IP"
     echo "rootfs_awk_path=$ROOT_AWK"

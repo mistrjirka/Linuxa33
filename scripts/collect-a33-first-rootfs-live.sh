@@ -17,7 +17,7 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="$RESULT_ROOT/a33-first-rootfs-live-$TIMESTAMP"
 ARCHIVE="$OUT.tar.gz"
 
-for command in ssh sha256sum awk grep find sort tar date mkdir cp mktemp; do
+for command in ssh sha256sum awk grep find sort tar date mkdir cp mktemp chmod rm; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required command: $command" >&2
         exit 1
@@ -205,6 +205,8 @@ chmod 700 "$REMOTE_SCRIPT"
 } | tee "$OUT/manifest.txt"
 
 SSH_OPTIONS=(
+    -o BatchMode=yes
+    -o ConnectionAttempts=1
     -o ConnectTimeout=15
     -o ServerAliveInterval=5
     -o ServerAliveCountMax=3

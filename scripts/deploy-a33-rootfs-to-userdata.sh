@@ -11,6 +11,9 @@ REQUIRED_CONFIRMATION="ERASE-ANDROID-USERDATA-INSTALL-PMOS"
 
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 ADB="${ADB:-adb}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 IMAGE_LINK="${IMAGE_LINK:-$PORT_ROOT/build/userdata-rootfs-images/current/a33x-userdata-pmos-root.img}"
 IMAGE_MANIFEST_LINK="${IMAGE_MANIFEST_LINK:-$PORT_ROOT/build/userdata-rootfs-images/current/manifest.txt}"
 STAGE_REPORT="${STAGE_REPORT:-$PORT_ROOT/build/a33-userdata-rootfs-stage.txt}"
@@ -134,9 +137,7 @@ fi
 mkdir -p "$PORT_ROOT/build"
 
 echo "=== Wait for exact known-good TWRP ==="
-until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
-    sleep 1
-done
+a33_init_recovery_adb 30
 
 LIVE_STATE="$(
     "$ADB" shell sh -s -- "$TARGET" "$REMOTE_IMAGE" 2>/dev/null <<'SH' | tr -d '\r'
@@ -252,26 +253,28 @@ sync
 SH
 
 echo "=== Read back the complete written image range ==="
-WRITTEN_PREFIX_SHA="$(
-    "$ADB" exec-out sh -c "dd if='$TARGET' bs=1048576 count='$READBACK_MIB' 2>/dev/null" \
-    | sha256sum \
-    | awk '{print $1}'
+WRITTEN_PREFIX_META="$(
+    "$ADB" exec-out sh -c "dd if='$TARGET' bs=1048576 count='$READBACK_MIB' 2>/dev/null" |
+        python3 -c 'import hashlib,sys
+h=hashlib.sha256()
+n=0
+while True:
+    block=sys.stdin.buffer.read(1024*1024)
+    if not block:
+        break
+    n += len(block)
+    h.update(block)
+print(n, h.hexdigest())'
 )"
-if [[ "$WRITTEN_PREFIX_SHA" != "$IMAGE_SHA" ]]; then
+WRITTEN_PREFIX_SIZE="$(awk '{print $1}' <<<"$WRITTEN_PREFIX_META")"
+WRITTEN_PREFIX_SHA="$(awk '{print $2}' <<<"$WRITTEN_PREFIX_META")"
+if [[ "$WRITTEN_PREFIX_SIZE" != "$IMAGE_SIZE" || "$WRITTEN_PREFIX_SHA" != "$IMAGE_SHA" ]]; then
     echo "REFUSING: userdata full-prefix SHA256 mismatch after write" >&2
     echo "expected=$IMAGE_SHA actual=$WRITTEN_PREFIX_SHA" >&2
     exit 1
 fi
 
-REMOTE_IDENTITY="$(
-    "$ADB" shell sh -s -- "$TARGET" 2>/dev/null <<'SH' | tr -d '\r'
-set -eu
-target="$1"
-echo "type=$(blkid -s TYPE -o value "$target" 2>/dev/null || true)"
-echo "label=$(blkid -s LABEL -o value "$target" 2>/dev/null || true)"
-echo "uuid=$(blkid -s UUID -o value "$target" 2>/dev/null || true)"
-SH
-)"
+REMOTE_IDENTITY="$(a33_ext4_identity "$TARGET")"
 REMOTE_TYPE="$(printf '%s\n' "$REMOTE_IDENTITY" | awk -F= '$1=="type" {print $2; exit}')"
 REMOTE_LABEL="$(printf '%s\n' "$REMOTE_IDENTITY" | awk -F= '$1=="label" {print $2; exit}')"
 REMOTE_UUID="$(printf '%s\n' "$REMOTE_IDENTITY" | awk -F= '$1=="uuid" {print $2; exit}')"
@@ -367,6 +370,7 @@ FINISHED="$(date -Ins)"
     echo "deployment_image=$IMAGE"
     echo "deployment_size=$IMAGE_SIZE"
     echo "deployment_sha256=$IMAGE_SHA"
+    echo "written_prefix_size=$WRITTEN_PREFIX_SIZE"
     echo "written_prefix_sha256=$WRITTEN_PREFIX_SHA"
     echo "filesystem_type=$REMOTE_TYPE"
     echo "filesystem_label=$REMOTE_LABEL"

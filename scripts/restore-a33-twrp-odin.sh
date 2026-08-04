@@ -29,7 +29,7 @@ EOF
     exit 2
 fi
 
-for command in sudo awk sha256sum date mkdir tee; do
+for command in bash sudo awk sha256sum date mkdir tee; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required command: $command" >&2
         exit 1

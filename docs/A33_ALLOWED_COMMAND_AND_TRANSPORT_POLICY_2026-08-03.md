@@ -75,7 +75,7 @@ journalctl shellcheck pv
 The audit also tests:
 
 - Python socket support;
-- Bash `/dev/tcp`, because the current observer uses it for TCP/22 probing;
+- Python socket creation and TCP/22 connection probing;
 - OpenSSH `StrictHostKeyChecking=accept-new` parsing.
 
 ## Required TWRP commands
@@ -83,19 +83,20 @@ The audit also tests:
 The exact known-good TWRP must expose:
 
 ```text
-sh awk grep sha256sum stat df rm readlink blockdev tail cat find dd sync
-blkid mkdir umount mount wc ls uname dmesg getprop tr sed cp
+sh awk grep sha256sum stat df rm readlink blockdev tail cat find dd sync mkdir umount mount wc ls uname dmesg getprop tr sed cp
 ```
 
 The audit does more than `command -v`. It functionally tests the exact forms
 used later, including:
+
+TWRP on this device has no standalone, Toybox, or BusyBox `blkid`; the chain must not call it.
 
 - `stat -c`;
 - `df -k`;
 - `find -printf`;
 - `dd` with explicit block sizes;
 - `blockdev --getsize64` and `--getro`;
-- `blkid -s TYPE -o value`;
+- binary-clean 2048-byte ext superblock reads parsed by host Python for type, label, and UUID;
 - read-only ext4 mount options and unmount;
 - SHA256, text-processing, copying, sync, properties, dmesg and path
   canonicalization.

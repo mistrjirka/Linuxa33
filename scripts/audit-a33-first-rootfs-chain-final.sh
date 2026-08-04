@@ -10,6 +10,9 @@ PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 ADB="${ADB:-adb}"
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 BASE_AUDIT="$SCRIPT_DIR/audit-a33-first-rootfs-chain.sh"
 EXECUTE_SCRIPT="$SCRIPT_DIR/execute-a33-first-rootfs-deployment.sh"
 RESCUE_VERIFY="$SCRIPT_DIR/verify-a33-twrp-rescue-assets.sh"
@@ -63,9 +66,7 @@ if [[ "$(rescue_value verification_status)" != passed || \
     exit 1
 fi
 
-until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
-    sleep 1
-done
+a33_init_recovery_adb 30
 SWAP_STATE="$(
     "$ADB" shell sh -s -- "$EXPECTED_USERDATA_RESOLVED" 2>/dev/null <<'SH' | tr -d '\r'
 expected="$1"

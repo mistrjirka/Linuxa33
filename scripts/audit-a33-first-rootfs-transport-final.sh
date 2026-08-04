@@ -9,6 +9,9 @@ export LANG=C
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMMAND_AUDIT="$SCRIPT_DIR/audit-a33-command-capabilities.sh"
 COMMAND_REPORT="$PORT_ROOT/build/a33-command-capabilities.txt"
@@ -38,6 +41,7 @@ mkdir -p "$PORT_ROOT/build"
 : > "$DETAILS"
 
 SCRIPTS=(
+    lib/a33-adb-runtime.sh
     audit-a33-command-capabilities.sh
     stage-a33-userdata-rootfs-in-twrp.sh
     deploy-a33-rootfs-to-userdata.sh
@@ -117,8 +121,7 @@ ssh -G \
     127.0.0.1 >/dev/null
 echo "ssh_strict_host_key_accept_new=passed" >> "$DETAILS"
 
-# The current observer uses Bash /dev/tcp. Test it against a temporary local
-# listener rather than assuming this optional Bash feature exists.
+# Test the same Python socket path used by the first-boot observer.
 TCP_DIR="$(mktemp -d)"
 TCP_PORT_FILE="$TCP_DIR/port"
 cleanup_tcp() {
@@ -158,10 +161,10 @@ done
     exit 1
 }
 TCP_PORT="$(cat "$TCP_PORT_FILE")"
-timeout 3 bash -c "exec 3<>/dev/tcp/127.0.0.1/$TCP_PORT; printf x >&3; exec 3>&-"
+a33_tcp_port_open 127.0.0.1 "$TCP_PORT" 3
 wait "$TCP_SERVER_PID"
 TCP_SERVER_PID=""
-echo "bash_dev_tcp_support=passed" >> "$DETAILS"
+echo "python_tcp_probe=passed" >> "$DETAILS"
 
 # Prove the exact ADB/TWRP pair can transfer the complete image in both
 # directions without exec-in. The staged file remains in volatile /tmp.
@@ -191,6 +194,7 @@ IMAGE_SIZE="$(value "$STAGE_REPORT" source_size)"
     echo "repo_commit=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
     echo "transport_audit_script_sha256=$(sha256sum "$SELF" | awk '{print $1}')"
     echo "command_audit_script_sha256=$(sha256sum "$COMMAND_AUDIT" | awk '{print $1}')"
+    echo "adb_runtime_helper_sha256=$(sha256sum "$SCRIPT_DIR/lib/a33-adb-runtime.sh" | awk '{print $1}')"
     echo "command_capability_report_sha256=$COMMAND_REPORT_SHA"
     echo "command_capability_audit_status=passed"
     echo "allowed_adb_subcommands=$(value "$COMMAND_REPORT" adb_allowed_subcommands)"
@@ -211,7 +215,7 @@ IMAGE_SIZE="$(value "$STAGE_REPORT" source_size)"
     echo "adb_push_full_image=passed"
     echo "adb_exec_out_full_readback=passed"
     echo "python_socket_support=passed"
-    echo "bash_dev_tcp_support=passed"
+    echo "python_tcp_probe=passed"
     echo "ssh_strict_host_key_accept_new=passed"
     echo "private_backup_checksums=$(value "$FINAL_CHAIN_REPORT" private_backup_checksums)"
     echo "rescue_assets_status=$(value "$FINAL_CHAIN_REPORT" rescue_assets_status)"

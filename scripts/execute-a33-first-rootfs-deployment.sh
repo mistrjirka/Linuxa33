@@ -66,7 +66,7 @@ if [[ "$(value transport_bound_final_audit_status)" != passed || \
       "$(value adb_push_full_image)" != passed || \
       "$(value adb_exec_out_full_readback)" != passed || \
       "$(value python_socket_support)" != passed || \
-      "$(value bash_dev_tcp_support)" != passed || \
+      "$(value python_tcp_probe)" != passed || \
       "$(value ssh_strict_host_key_accept_new)" != passed || \
       "$(value private_backup_checksums)" != passed || \
       "$(value rescue_assets_status)" != passed || \
@@ -95,6 +95,7 @@ compare_hash final_chain_audit_report_sha256 "$FINAL_CHAIN_REPORT"
 compare_hash stage_report_sha256 "$STAGE_REPORT"
 
 SCRIPTS=(
+    lib/a33-adb-runtime.sh
     audit-a33-command-capabilities.sh
     stage-a33-userdata-rootfs-in-twrp.sh
     deploy-a33-rootfs-to-userdata.sh
@@ -106,6 +107,7 @@ SCRIPTS=(
     restore-a33-twrp-odin.sh
 )
 KEYS=(
+    adb_runtime_helper_sha256
     command_audit_script_sha256
     stage_script_sha256
     deploy_script_sha256

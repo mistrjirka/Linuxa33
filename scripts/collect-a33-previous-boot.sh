@@ -6,6 +6,9 @@ trap 'rc=$?; echo "ERROR: ${BASH_SOURCE[0]} failed at line $LINENO: $BASH_COMMAN
 LABEL="${1:-candidate}"
 PORT_ROOT="${PORT_ROOT:-$HOME/a33-port}"
 ADB="${ADB:-adb}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/a33-adb-runtime.sh
+source "$SCRIPT_DIR/lib/a33-adb-runtime.sh"
 EXPECTED_TWRP_SHA256="${EXPECTED_TWRP_SHA256:-414df197c21de25fc5627cd3a4d8a59011bef0141cfa479560c48aa378d3ad7e}"
 RESULT_ROOT="${RESULT_ROOT:-$PORT_ROOT/build/runtime-results}"
 METADATA_DEVICE="${METADATA_DEVICE:-/dev/block/by-name/metadata}"
@@ -15,7 +18,7 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="$RESULT_ROOT/${LABEL}-result-$TIMESTAMP"
 ARCHIVE="$OUT.tar.gz"
 
-for command in "$ADB" grep tar sha256sum awk date mkdir cp python3; do
+for command in "$ADB" grep tar sha256sum awk date mkdir cp python3 stat sleep; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "Missing required command: $command" >&2
         exit 1
@@ -25,9 +28,7 @@ done
 mkdir -p "$OUT"
 
 echo "=== Wait for TWRP ADB shell ==="
-until "$ADB" shell 'echo ADB_OK' 2>/dev/null | grep -q ADB_OK; do
-    sleep 1
-done
+a33_init_recovery_adb 30
 
 echo "TWRP ADB is ready"
 
