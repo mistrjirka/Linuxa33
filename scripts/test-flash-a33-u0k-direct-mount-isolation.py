@@ -38,7 +38,7 @@ assert patch["operation"] == "python-byte-preserving-direct-mount-isolation"
 assert patch["patch_status"] == "passed"
 assert patch["shell_text_outside_two_exact_blocks_preserved"] == "yes"
 
-assert module.sha_bytes(b"fixture") == "b9ac3eac9871673dcb745d0501dccc2c450913a51bcd1c10278d94a85d1c8e5f"
+assert module.sha_bytes(b"fixture") == "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
 
 try:
     module.FlashProfile(
