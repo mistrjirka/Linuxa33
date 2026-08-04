@@ -68,7 +68,7 @@ assert module.normalize_boot_info(u0k_info) != module.normalize_boot_info(change
 changed_kernel = u0l_info.replace("kernel size: 1234", "kernel size: 1235")
 assert module.normalize_boot_info(u0k_info) != module.normalize_boot_info(changed_kernel)
 
-assert module.EXPECTED_U0L_BUILDER_BLOB == "c976721153b43e4507478597bb6680972b4cc8dc"
+assert module.EXPECTED_U0L_BUILDER_BLOB == "6c3133d5efbbdf08c3197eae3693d215fbf1b642"
 assert module.COMPONENTS_UNCHANGED == ("kernel", "dtb", "recovery_dtbo")
 assert module.IGNORED_BOOT_INFO_PREFIXES == ("ramdisk size:", "ramdisk_size:")
 
