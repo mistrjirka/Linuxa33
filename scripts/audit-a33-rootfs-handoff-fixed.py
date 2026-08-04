@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 from pathlib import Path
 import re
+import shutil
 import sys
 
 HERE = Path(__file__).resolve().parent
@@ -24,25 +25,14 @@ def load(name: str, path: Path):
 
 
 base = load("a33_rootfs_handoff_audit_base", HERE / "audit-a33-rootfs-handoff.py")
-from a33_rootfs_busybox import (
-    BusyBoxResolutionError,
-    RUNTIME_DIR,
-    build_runtime_upload_plan,
-    resolve_verified_busyboxes,
-)
+from a33_rootfs_busybox import BusyBoxResolutionError, resolve_verified_busyboxes
 
 _original_extract = base.extract_initramfs_artifacts
+RUNTIME_DIR = "/tmp/a33-u0j-runtime"
 
 
 def extract_initramfs_artifacts(initramfs: Path, out: Path):
-    """Run the existing extraction, with a hash-bound BusyBox fallback.
-
-    The U0h finalization proved that the initramfs BusyBox binaries and the
-    pmbootstrap rootfs copies were byte-identical. U0i/U0j changed only
-    init_functions.sh. If the lightweight CPIO parser cannot address the
-    BusyBox path/hard-link representation directly, use those already-proven
-    rootfs bytes after rechecking their recorded SHA256 values.
-    """
+    """Run the existing extraction, with a SHA-bound BusyBox fallback."""
 
     try:
         return _original_extract(initramfs, out)
@@ -88,6 +78,85 @@ def extract_initramfs_artifacts(initramfs: Path, out: Path):
     return binaries
 
 
+BUSYBOX_SCOPE_FIXTURE = r'''set -eu
+find_fixture() {
+    a33x_root=/dev/block/sda36
+    case "$#" in
+        0) printf '%s\n' "$a33x_root" ;;
+        1)
+            [ "$1" = partition ] || return 2
+            partition="$a33x_root"
+            ;;
+        *) return 2 ;;
+    esac
+    unset a33x_root
+}
+consumer() {
+    local partition
+    partition=BEFORE
+    find_fixture partition
+    [ "$partition" = /dev/block/sda36 ]
+}
+consumer
+[ "$(find_fixture)" = /dev/block/sda36 ]
+echo exact_initramfs_busybox_dynamic_scope=passed
+'''
+
+
+TWRP_FUNCTION_TEST = r'''set -eu
+function_file="$1"
+PATH=/sbin:/system/bin:/system/xbin
+export PATH
+. "$function_file"
+
+echo "direct_blkid=$(blkid /dev/block/sda36 2>/dev/null || true)"
+stdout_value="$(find_root_partition)"
+echo "stdout_rc=$?"
+echo "stdout_value=$stdout_value"
+
+consumer() {
+    local partition
+    partition=BEFORE
+    find_root_partition partition
+    rc=$?
+    echo "output_variable_rc=$rc"
+    echo "output_variable_value=$partition"
+    [ "$rc" -eq 0 ]
+    [ "$partition" = /dev/block/sda36 ]
+}
+consumer
+echo exact_u0j_dual_api_runtime=passed
+'''
+
+
+def _run_exact_busybox_scope_test(binaries: dict[str, Path], out: Path) -> None:
+    if set(binaries) != {"busybox", "busybox-extras"}:
+        raise base.Refusal(
+            f"resolved BusyBox set is incomplete: {sorted(binaries)}"
+        )
+    pmbootstrap = shutil.which("pmbootstrap")
+    if not pmbootstrap:
+        raise base.Refusal("pmbootstrap is required for exact BusyBox shell testing")
+
+    completed = base.run_host(
+        [pmbootstrap, "chroot", "-r", "--", "/bin/busybox", "sh", "-c", BUSYBOX_SCOPE_FIXTURE],
+        timeout=30,
+    )
+    output = (
+        f"command=pmbootstrap chroot -r -- /bin/busybox sh -c <fixture>\n"
+        f"returncode={completed.returncode}\n"
+        f"resolved_busybox={binaries['busybox']}\n"
+        f"resolved_busybox_sha256={base.sha_file(binaries['busybox'])}\n"
+        f"=== stdout ===\n{completed.stdout}"
+        f"=== stderr ===\n{completed.stderr}"
+    )
+    base.write_text(out / "exact-initramfs-busybox-shell-semantics.txt", output)
+    if completed.returncode != 0 or completed.stdout.count(
+        "exact_initramfs_busybox_dynamic_scope=passed"
+    ) != 1:
+        raise base.Refusal("exact initramfs BusyBox dynamic-scope test failed")
+
+
 def _remote_metadata(adb: str, serial: str, remote: str) -> tuple[int, str]:
     output = base.common.adb_shell(
         adb,
@@ -113,30 +182,20 @@ def test_exact_busybox_runtime(
     binaries: dict[str, Path],
     out: Path,
 ) -> None:
-    """Upload, verify and execute the exact U0j BusyBox runtime fixture.
+    """Prove shell semantics and the exact U0j function without ELF-loader ambiguity."""
 
-    Every volatile upload is size/SHA-bound before execution. This prevents a
-    resolver-key or remote-path mismatch from silently skipping the binaries.
-    """
+    _run_exact_busybox_scope_test(binaries, out)
 
     local_test = out / "u0j-find-root-runtime-test.sh"
-    runtime_text = base.RUNTIME_TEST.replace(
-        "/tmp/a33-u0j-tools", f"{RUNTIME_DIR}/tools"
-    ).replace(
-        "/tmp/a33-u0j-find_root_partition.sh",
-        f"{RUNTIME_DIR}/find_root_partition.sh",
+    base.write_text(local_test, TWRP_FUNCTION_TEST)
+    find_root = out / "u0j-find_root_partition.sh"
+    if not find_root.is_file() or find_root.stat().st_size <= 0:
+        raise base.Refusal(f"missing exact U0j function script: {find_root}")
+
+    plan = (
+        (find_root, f"{RUNTIME_DIR}/find_root_partition.sh"),
+        (local_test, f"{RUNTIME_DIR}/runtime-test.sh"),
     )
-    base.write_text(local_test, runtime_text)
-
-    try:
-        plan = build_runtime_upload_plan(
-            binaries=binaries,
-            find_root_script=out / "u0j-find_root_partition.sh",
-            runtime_test_script=local_test,
-        )
-    except BusyBoxResolutionError as exc:
-        raise base.Refusal(str(exc)) from exc
-
     base.common.adb_shell(
         adb,
         serial,
@@ -164,26 +223,15 @@ def test_exact_busybox_runtime(
 
         remote_script = r'''set -eu
 dir="$1"
-chmod 755 "$dir/busybox" "$dir/busybox-extras" "$dir/runtime-test.sh"
-rm -rf "$dir/tools"
-mkdir -p "$dir/tools"
-provider=""
-for candidate in "$dir/busybox" "$dir/busybox-extras"; do
-    if "$candidate" --list | grep -qx blkid; then
-        provider="$candidate"
-        break
-    fi
-done
-[ -n "$provider" ] || { echo blkid_provider=missing; exit 90; }
-ln -s "$provider" "$dir/tools/blkid"
-echo "blkid_provider=$provider"
-"$dir/busybox" sh "$dir/runtime-test.sh"
+command -v blkid >/dev/null 2>&1 || { echo twrp_blkid=missing; exit 90; }
+chmod 755 "$dir/runtime-test.sh"
+sh "$dir/runtime-test.sh" "$dir/find_root_partition.sh"
 '''
         output = base.common.adb_shell(adb, serial, remote_script, RUNTIME_DIR)
         base.write_text(out / "runtime-upload-verification.txt", "\n".join(evidence) + "\n")
         base.write_text(out / "exact-u0j-find-root-runtime.txt", output)
         if output.count("exact_u0j_dual_api_runtime=passed") != 1:
-            raise base.Refusal("exact embedded BusyBox dual-API runtime test failed")
+            raise base.Refusal("exact U0j function test against TWRP sda36 failed")
     finally:
         base.common.adb_shell(
             adb,
