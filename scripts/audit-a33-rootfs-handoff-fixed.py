@@ -154,6 +154,23 @@ def _run_exact_busybox_scope_test(binaries: dict[str, Path], out: Path) -> None:
         raise base.Refusal(
             f"resolved BusyBox set is incomplete: {sorted(binaries)}"
         )
+
+    resolved_sha = base.sha_file(binaries["busybox"])
+    evidence_path = out / "exact-initramfs-busybox-shell-semantics.txt"
+    if evidence_path.is_file():
+        previous = evidence_path.read_text(encoding="utf-8", errors="replace")
+        if (
+            "returncode=0\n" in previous
+            and f"resolved_busybox_sha256={resolved_sha}\n" in previous
+            and previous.count("exact_initramfs_busybox_dynamic_scope=passed") == 1
+        ):
+            base.write_text(
+                out / "exact-initramfs-busybox-shell-semantics-reuse.txt",
+                "evidence_reused=yes\n"
+                f"resolved_busybox_sha256={resolved_sha}\n",
+            )
+            return
+
     pmbootstrap = shutil.which("pmbootstrap")
     if not pmbootstrap:
         raise base.Refusal("pmbootstrap is required for exact BusyBox shell testing")
@@ -166,11 +183,11 @@ def _run_exact_busybox_scope_test(binaries: dict[str, Path], out: Path) -> None:
         f"command=pmbootstrap chroot -r -- /bin/busybox sh -c <fixture>\n"
         f"returncode={completed.returncode}\n"
         f"resolved_busybox={binaries['busybox']}\n"
-        f"resolved_busybox_sha256={base.sha_file(binaries['busybox'])}\n"
+        f"resolved_busybox_sha256={resolved_sha}\n"
         f"=== stdout ===\n{completed.stdout}"
         f"=== stderr ===\n{completed.stderr}"
     )
-    base.write_text(out / "exact-initramfs-busybox-shell-semantics.txt", output)
+    base.write_text(evidence_path, output)
     if completed.returncode != 0 or completed.stdout.count(
         "exact_initramfs_busybox_dynamic_scope=passed"
     ) != 1:
