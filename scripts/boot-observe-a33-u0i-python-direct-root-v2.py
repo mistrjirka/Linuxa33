@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime
 import importlib.util
 import json
 import os
@@ -41,14 +41,28 @@ def now_iso() -> str:
 
 
 def run_host(args: list[str], *, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            args,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=124,
+            stdout=stdout,
+            stderr=stderr + f"\ncommand_timeout_seconds={timeout}\n",
+        )
 
 
 def require_command(name: str) -> str:
@@ -344,7 +358,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except (Refusal, flash.Refusal) as exc:
         print(f"REFUSING OBSERVER: {exc}", file=sys.stderr)
-        raise SystemExit(1)
-    except subprocess.TimeoutExpired as exc:
-        print(f"REFUSING OBSERVER: command timed out: {exc.cmd}", file=sys.stderr)
         raise SystemExit(1)
