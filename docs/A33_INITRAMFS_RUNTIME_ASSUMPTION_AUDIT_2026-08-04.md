@@ -2,145 +2,99 @@
 
 **Date:** 2026-08-04  
 **Device:** Samsung Galaxy A33 5G (`SM-A336B`, `a33x`)  
-**Current approved U0i entrypoint:** `scripts/make-u0i-python-direct-root.py`
+**Current approved U0i entrypoint:** `scripts/make-u0i-python-direct-root-v2.py`
 
-## Why the Bash U0i chain was replaced
+## Why the earlier U0i builders were rejected
 
-The failed U0i host runs did not expose new phone failures. They exposed brittle
-host-side validators that repeatedly assumed a particular generated shell
-implementation:
+The phone did not cause the repeated U0i host-side failures. The failures came
+from validators that assumed one particular implementation of generated
+postmarketOS shell code:
 
-- direct `pmos_root=` parsing inside one function;
-- hooks sourced into PID 1 instead of child shells;
-- assignment-based consumption instead of an empty-test loop;
-- `blkid` appearing directly inside `find_root_partition()` instead of behind a
-  helper.
+1. a direct `pmos_root=` parser inside `find_root_partition()`;
+2. hooks sourced into PID 1 rather than executed in child shells;
+3. assignment-based consumption of `find_root_partition()`;
+4. a direct command substitution in `wait_root_partition()`;
+5. `blkid` appearing directly inside `find_root_partition()` rather than behind
+   another helper.
 
-The old direct builder also unpacked, rewrote and repacked the complete cpio
-archive. That created unnecessary metadata, ordering and hard-link risks.
+Each assumption correctly failed closed before any phone partition write, but
+stacking more source-shape validators was the wrong design.
 
-Both Bash U0i entrypoints are now fail-closed stubs. The explicit-root and
-hook-function approaches remain disabled. No recovery image was produced by any
-of those failed host runs.
+## Runtime facts actually proven
 
-## Confirmed runtime facts
+- U0h hook 05 runs before root waiting.
+- Hook 05 creates `/dev/sda36` and `/dev/block/sda36` from the exact sysfs
+  major/minor pair.
+- It validates exactly `223125504` sectors.
+- Direct `blkid /dev/block/sda36` reports ext4 with label `pmOS_root`.
+- The generic postmarketOS root path still does not select the partition.
+- The second stage reaches `wait_root_partition()` but never reaches
+  `switch_root`, OpenRC or sshd.
+- The U0h initramfs contains 67 validated modules and all retained U0g hooks and
+  helpers.
 
-1. BusyBox applet symlinks are created at runtime before second stage. They are
-   not all stored as individual paths in the compressed initramfs.
-2. Normal initramfs hooks execute in child shells in the exact generated image.
-   A hook cannot redefine a function or set a shell variable in PID 1.
-3. The exact generated `find_root_partition()` implementation need not contain
-   `blkid`, `pmOS_root` or command-line parsing directly; helper calls are valid.
-4. `wait_root_partition()` consumes `find_root_partition()` through command
-   substitution. Valid implementations include assignment and the
-   postmarketOS-style empty test:
+## Approved U0i v2 design
 
-   ```sh
-   while [ -z "$(find_root_partition)" ]; do
-       sleep 1
-   done
-   ```
+U0i v2 no longer analyzes or depends on the old root-discovery call graph. It
+uses Python to parse the actual gzip/newc archive and replaces exactly two shell
+functions inside the existing `init_functions.sh` payload:
 
-5. U0h creates `/dev/block/sda36`, validates its exact size, and directly
-   identifies ext4 `LABEL="pmOS_root"`, but generic autodetection still returns
-   no root device.
-6. Absolute symlinks inside a mounted rootfs must be resolved relative to the
-   mounted root, not relative to TWRP's `/`.
+- `find_root_partition()` becomes an A33-specific implementation that requires
+  `/dev/block/sda36`, re-runs direct `blkid`, requires ext4 and `pmOS_root`, and
+  prints only the verified device path;
+- `wait_root_partition()` becomes a direct loop over that new function.
 
-## Python U0i implementation
+This means the old implementation may use direct substitution, helper
+functions, cached variables or another internal arrangement. None of those
+shapes are trusted or required.
 
-The approved implementation consists of:
+## Preservation contract
 
-- `scripts/lib/a33_cpio.py` — parser/editor for `070701` newc and `070702` CRC
-  archives;
-- `scripts/lib/a33_shell.py` — structural extraction of the actual shell
-  functions and executable second-stage calls;
-- `scripts/make-u0i-python-direct-root.py` — fail-closed build driver;
-- `scripts/test-u0i-python-tools.py` — synthetic regression tests.
+The Python builder requires all of the following before producing recovery:
 
-The Python builder:
+- exact U0h initramfs hash matches its report;
+- exact U0g helper and hooks 03/04 hashes match;
+- exact U0h hook 05 hash matches;
+- module count remains 67;
+- only the `init_functions.sh` CPIO payload changes;
+- CPIO entry order, names, modes, link counts, unrelated payloads and trailer
+  tail remain unchanged;
+- within `init_functions.sh`, all text outside the two named functions remains
+  byte-identical;
+- the patched shell file passes `sh -n`;
+- the second-stage executable order remains hooks, root wait, resize, mount and
+  `switch_root`;
+- the recovery kernel command line remains unchanged;
+- recovery is exactly 100663296 bytes and AVB/layout validation passes;
+- no phone partition is written by the builder.
 
-1. verifies the exact audited U0h initramfs and reports;
-2. decompresses and parses the actual cpio bytes without extracting the whole
-   tree to disk;
-3. locates exactly one `init_functions.sh`, `init_2nd.sh`,
-   `find_root_partition()` and `wait_root_partition()`;
-4. accepts both assignment and empty-test stdout consumption without assuming
-   the original discovery implementation;
-5. validates executable second-stage ordering while ignoring comments;
-6. replaces only the `find_root_partition()` payload so it revalidates
-   `/dev/block/sda36` as ext4 `pmOS_root` and emits only that path;
-7. preserves `wait_root_partition()` byte-for-byte;
-8. updates only the target cpio entry's size and CRC fields;
-9. preserves entry order, names, modes, link counts, all unrelated payloads and
-   bytes after `TRAILER!!!`;
-10. rechecks the 67 modules and all retained U0g/U0h hashes;
-11. calls the already-proven recovery packer with an unchanged kernel command
-    line;
-12. performs no phone partition write.
+## Regression coverage
 
-The self-test covers:
+`scripts/test-u0i-python-direct-root-v2.py` tests three incompatible original
+root-discovery shapes:
 
-- both newc and CRC cpio formats;
-- names with and without a leading `./`;
-- assignment and empty-test root consumers;
-- comments containing misleading command names;
-- exact single-payload delta and preserved trailer bytes.
+- direct `$(find_root_partition)` waiting;
+- an indirect helper-based implementation;
+- global cached state with no direct call between the functions.
 
-## Similar issues found
+For every shape, the test proves only the two function bodies change and only
+`init_functions.sh` changes inside the synthetic CPIO archive.
 
-### Root-relative symlink checks
+## Disabled paths
 
-The original `scripts/deploy-a33-rootfs-to-userdata.sh` still contains the old
-`[ -e "$mountpoint$path" ]` verifier. It can false-fail for absolute rootfs
-symlinks such as `/sbin/init` or OpenRC runlevel links because TWRP resolves the
-link target against its own `/`. It is a historical destructive-path script and
-must not be rerun for the current installation. The successful v2 postwrite
-verifier and the U0h flash verifier use root-aware checks.
+Do not use these superseded builders:
 
-Historical `finalize-a33-userdata-postwrite-verification.sh` and older
-first-rootfs failure collectors are likewise superseded. Use the latest
-root-aware verifier/collector for new evidence.
+- `scripts/make-u0i-explicit-userdata-root-recovery.sh`
+- `scripts/make-u0i-forced-root-function-recovery.sh`
+- `scripts/make-u0i-direct-root-function-recovery.sh`
+- `scripts/make-u0i-direct-root-function-recovery-v2.sh`
+- `scripts/make-u0i-python-direct-root.py`
 
-### Token presence is not runtime proof
-
-The old unified-root handoff audit proved that root-discovery and switch-root
-code existed, but not that a usable `/dev` node existed or that generic
-enumeration selected it. New checks validate callers, runtime providers and
-observed output instead of requiring implementation tokens in one function.
-
-### Shell scope
-
-A file being called a hook does not prove it is sourced into the parent shell.
-The exact `run_hooks()` implementation must be inspected before relying on
-variable or function side effects. The Python U0i path no longer relies on hook
-scope.
-
-### Shell error propagation
-
-Critical values must be computed in explicit checked operations before being
-reported. Self-modifying Bash wrappers and exact multiline replacement blocks
-are prohibited in the approved U0i path.
-
-### Archive topology
-
-Repacking an entire cpio tree and comparing only file hashes is insufficient.
-The Python editor copies every raw entry unchanged except the selected payload,
-then reparses and verifies the generated archive.
+They are retained only as explicit refusal stubs or in Git history.
 
 ## Current rule
 
-Do not infer behavior from a token, path name, package name or hook number.
-For every boot-critical dependency, validate:
-
-```text
-artifact exists
-    -> runtime provider exists
-    -> execution scope is correct
-    -> caller consumes the result
-    -> downstream order is correct
-    -> generated artifact preserves all unrelated bytes and metadata
-```
-
-Only `scripts/make-u0i-python-direct-root.py` is approved for the next U0i
-host-side build.
+Do not infer runtime behavior from source token placement or one expected call
+shape. For boot-critical changes, validate the artifact and replace the smallest
+complete runtime contract rather than attempting to adapt to undocumented
+internal implementation details.
