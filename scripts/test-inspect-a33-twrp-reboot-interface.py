@@ -26,7 +26,7 @@ reboot_command=/sbin/reboot
 twrp_help_begin
 usage: twrp reboot recovery
 other help
-trwp_help_typo
+twrp_help_end
 reboot_links_begin
 lrwxrwxrwx /sbin/reboot
 reboot_links_end
@@ -34,16 +34,12 @@ phone_partition_writes=no
 phone_reboot_performed=no
 """
 assert module.values(fixture)["boot_id"] == "abc"
+assert module.values(fixture)["phone_partition_writes"] == "no"
 assert module.section(fixture, "twrp_help") == [
     "usage: twrp reboot recovery",
     "other help",
-    "trwp_help_typo",
-    "reboot_links_begin",
-    "lrwxrwxrwx /sbin/reboot",
-    "reboot_links_end",
-    "phone_partition_writes=no",
-    "phone_reboot_performed=no",
 ]
+assert module.section(fixture, "reboot_links") == ["lrwxrwxrwx /sbin/reboot"]
 
 script = module.REMOTE_SCRIPT
 for required in (
