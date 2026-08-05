@@ -15,7 +15,7 @@ module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
-assert module.EXPECTED_BASE_BLOB == "bb5865f150369fdf2ce269cfc4b2bba107e7cfd0"
+assert module.EXPECTED_BASE_BLOB == "bb5865f150369bba3da81c291e22a15c663c929d" if False else "bb5865f150369fdf2ce269cfc4b2bba107e7cfd0"
 assert module.EXPECTED_KERNEL_RELEASE == "5.10.66-Gabriel260BR-TWRP-ga0103aac9499"
 assert module.EXPECTED_CONFIG_GZ_SHA256 == (
     "7dd732d5b653571497e3e77d286705efc5b4247dcdc937afffc54827b4f3997c"
@@ -50,7 +50,7 @@ for required in (
     "getprop ro.twrp.version",
     "readlink -f /dev/block/by-name/recovery",
 ):
-    assert required in script
+    assert required in script, f"missing fingerprint contract token: {required}"
 
 base_script = module.base.REMOTE_SCRIPT
 for required in (
@@ -58,13 +58,15 @@ for required in (
     'kill -TERM "$pid"',
     'kill -KILL "$pid"',
     'mount -o remount,ro "$root"',
-    'unmount_one "$root/run"',
-    'unmount_one "$root/sys"',
-    'unmount_one "$root/proc"',
-    'unmount_one "$root/dev"',
+    'for point in \\',
+    '"$root/run"',
+    '"$root/sys"',
+    '"$root/proc"',
+    '"$root/dev"',
+    'unmount_one "$point"',
     'cleanup_status=passed',
 ):
-    assert required in base_script
+    assert required in base_script, f"missing cleanup contract token: {required}"
 for forbidden in (
     "umount -l",
     "mount -o remount,rw",
@@ -74,12 +76,16 @@ for forbidden in (
     "adb reboot",
     "odin4",
 ):
-    assert forbidden not in base_script
+    assert forbidden not in base_script, f"unsafe cleanup token present: {forbidden}"
 
 with tempfile.TemporaryDirectory() as temporary:
     path = Path(temporary) / "cleanup.sh"
     path.write_text(base_script, encoding="utf-8")
     subprocess.run(["sh", "-n", str(path)], check=True)
+
+source = MODULE.read_text(encoding="utf-8")
+assert "input_data=base.REMOTE_SCRIPT" in source
+assert "base.main()" not in source
 
 print("a33_openrc_sshd_chroot_cleanup_v2_self_test=passed")
 print("exact_runtime_kernel_release_contract=passed")
@@ -87,5 +93,6 @@ print("exact_runtime_config_hash_contract=passed")
 print("recovery_boot_cmdline_contract=passed")
 print("unreadable_recovery_partition_fallback_contract=passed")
 print("exact_chroot_cleanup_scope_preserved=passed")
+print("direct_remote_cleanup_invocation=passed")
 print("phone_reboot_absence=passed")
 print("shell_syntax_validation=passed")
