@@ -20,12 +20,40 @@ assert module.PHONE_IP == "172.16.42.1"
 assert module.HOST_CIDR == "172.16.42.2/24"
 assert module.USB_ID == "04e8:6860"
 
-assert module.tcp_state("127.0.0.1", port=1, timeout=0.05)[0] in {
-    "connection-refused",
-    "connect-error-111",
-    "connect-error-61",
-    "connect-error-10061",
-}
+
+class FakeSocket:
+    def __init__(self, result: int, payload: bytes = b"") -> None:
+        self.result = result
+        self.payload = payload
+
+    def settimeout(self, timeout: float) -> None:
+        assert timeout > 0
+
+    def connect_ex(self, address: tuple[str, int]) -> int:
+        assert address == ("example.invalid", 22)
+        return self.result
+
+    def recv(self, count: int) -> bytes:
+        assert count == 128
+        return self.payload
+
+    def close(self) -> None:
+        pass
+
+
+original_socket = module.socket.socket
+try:
+    module.socket.socket = lambda *args, **kwargs: FakeSocket(111)
+    assert module.tcp_state("example.invalid") == ("connection-refused", "")
+    module.socket.socket = lambda *args, **kwargs: FakeSocket(
+        0, b"SSH-2.0-OpenSSH_test\r\n"
+    )
+    assert module.tcp_state("example.invalid") == (
+        "ssh-banner",
+        "SSH-2.0-OpenSSH_test",
+    )
+finally:
+    module.socket.socket = original_socket
 
 source = MODULE.read_text(encoding="utf-8")
 for required in (
