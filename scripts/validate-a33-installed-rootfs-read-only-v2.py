@@ -9,8 +9,10 @@ import sys
 HERE = Path(__file__).resolve().parent
 BASE = HERE / "validate-a33-installed-rootfs-read-only.py"
 HELPER = HERE / "lib/a33_exact_block_node.py"
+EXT4_IDENTITY = HERE / "lib/a33_ext4_identity_text.py"
 EXPECTED_BASE_BLOB = "d3c15477af1bb53e0890637f16eafc865a2d0368"
 EXPECTED_HELPER_BLOB = "2232f92bbf2782aed88acd9246ed063148ca63a8"
+EXPECTED_EXT4_IDENTITY_BLOB = "547aa185c56cfdefe09efab2ba1fbe1e63950de0"
 EXACT_USERDATA = "/dev/block/sda36"
 
 
@@ -26,6 +28,7 @@ def load(name: str, path: Path):
 
 base = load("a33_installed_rootfs_readonly_v2_base", BASE)
 helper = load("a33_installed_rootfs_readonly_v2_exact_node", HELPER)
+ext4_identity = load("a33_installed_rootfs_readonly_v2_ext4_identity", EXT4_IDENTITY)
 
 
 def adb_argument(argv: list[str]) -> str:
@@ -54,6 +57,9 @@ def configure_exact_userdata() -> None:
             f"actual={helper.EXACT_NODE!r} expected={EXACT_USERDATA!r}"
         )
     base.common.USERDATA = EXACT_USERDATA
+    base.common.ext4_identity = lambda adb, serial: ext4_identity.ext4_identity(
+        base.common, adb, serial
+    )
 
 
 def main() -> int:
@@ -61,6 +67,7 @@ def main() -> int:
     for path, expected in (
         (BASE, EXPECTED_BASE_BLOB),
         (HELPER, EXPECTED_HELPER_BLOB),
+        (EXT4_IDENTITY, EXPECTED_EXT4_IDENTITY_BLOB),
     ):
         actual = base.git_blob(repo, path)
         if actual != expected:
@@ -78,6 +85,7 @@ def main() -> int:
     print(f"exact_block_node_created={'yes' if state.created else 'no'}")
     print(f"exact_block_node_kernel_dev={state.kernel_dev}")
     print("ephemeral_device_node_write=/dev-tmpfs-only")
+    print("ext4_identity_transport=adb-shell-base64")
     try:
         return base.main()
     finally:
@@ -97,6 +105,7 @@ if __name__ == "__main__":
         base.cleanup.CleanupV2Error,
         base.common.Refusal,
         helper.ExactBlockNodeError,
+        ext4_identity.Ext4IdentityError,
         OSError,
         ValueError,
     ) as exc:
