@@ -24,14 +24,32 @@ def safe_member_name(name: str) -> PurePosixPath:
     return path
 
 
-def read_member(archive: tarfile.TarFile, suffix: str) -> bytes:
+def archive_root(archive: tarfile.TarFile) -> PurePosixPath:
+    roots: set[str] = set()
+    for member in archive.getmembers():
+        path = safe_member_name(member.name)
+        if path.parts:
+            roots.add(path.parts[0])
+    if len(roots) != 1:
+        raise AnalysisError(f"archive must have one top-level directory, found {sorted(roots)!r}")
+    return PurePosixPath(next(iter(roots)))
+
+
+def read_relative(
+    archive: tarfile.TarFile,
+    root: PurePosixPath,
+    relative: str,
+) -> bytes:
+    wanted = root / PurePosixPath(relative)
     matches = []
     for member in archive.getmembers():
         path = safe_member_name(member.name)
-        if member.isfile() and path.as_posix().endswith(suffix):
+        if member.isfile() and path == wanted:
             matches.append(member)
     if len(matches) != 1:
-        raise AnalysisError(f"expected one archive member ending in {suffix!r}, found {len(matches)}")
+        raise AnalysisError(
+            f"expected one exact archive member {wanted.as_posix()!r}, found {len(matches)}"
+        )
     stream = archive.extractfile(matches[0])
     if stream is None:
         raise AnalysisError(f"cannot read archive member: {matches[0].name}")
@@ -62,13 +80,16 @@ def analyze_archive(path: Path) -> dict[str, object]:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     try:
         with tarfile.open(path, "r:*") as archive:
-            summary = json.loads(read_member(archive, "/summary.json"))
+            root = archive_root(archive)
+            summary = json.loads(read_relative(archive, root, "summary.json"))
             observation_summary = json.loads(
-                read_member(archive, "/observation/summary.json")
+                read_relative(archive, root, "observation/summary.json")
             )
-            rows = parse_jsonl(read_member(archive, "/observation/observation.jsonl"))
-            last_kmsg = read_member(
-                archive, "/last_kmsg.sanitized.txt"
+            rows = parse_jsonl(
+                read_relative(archive, root, "observation/observation.jsonl")
+            )
+            last_kmsg = read_relative(
+                archive, root, "last_kmsg.sanitized.txt"
             ).decode("utf-8", errors="replace")
     except (tarfile.TarError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise AnalysisError(f"cannot inspect archive: {exc}") from exc
