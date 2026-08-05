@@ -24,10 +24,10 @@ INIT_TARGET = "init_2nd.sh"
 WATCHDOG_TARGET = "hooks/01-a33x-watchdog.sh"
 MODULES = 67
 MARKER_PREFIX = "a33x-u0m-watchdog-handoff"
-MARKERS = (
-    "shutdown-request",
-    "shutdown-success",
-)
+MARKERS = ("shutdown-request", "shutdown-success")
+NOWAYOUT_PARAMETER = "/sys/module/s3c2410_wdt/parameters/nowayout"
+STOP_LOG = "Watchdog cluster 0 stop done"
+DID_NOT_STOP_LOG = "watchdog0: watchdog did not stop!"
 
 
 def load(name: str, path: Path):
@@ -76,9 +76,26 @@ printf '%s\\n' "$a33x_watchdog_pid" > /run/a33x-watchdog.pid
 log_a33x_watchdog "feeder pid=$a33x_watchdog_pid device=$watchdog_device"
 '''
 
-REPLACEMENT_FEEDER_BLOCK = '''WATCHDOG_SHUTDOWN_REQUEST=/run/a33x-watchdog.shutdown-request
+REPLACEMENT_FEEDER_BLOCK = f'''WATCHDOG_SHUTDOWN_REQUEST=/run/a33x-watchdog.shutdown-request
 WATCHDOG_SHUTDOWN_STATUS=/run/a33x-watchdog.shutdown-status
+WATCHDOG_NOWAYOUT_PARAMETER={NOWAYOUT_PARAMETER}
 rm -f "$WATCHDOG_SHUTDOWN_REQUEST" "$WATCHDOG_SHUTDOWN_STATUS"
+
+read_watchdog_nowayout()
+{{
+\traw_nowayout="$(cat "$WATCHDOG_NOWAYOUT_PARAMETER" 2>/dev/null || true)"
+\tcase "$raw_nowayout" in
+\t\tN|n|0) printf '%s\\n' 0 ;;
+\t\tY|y|1) printf '%s\\n' 1 ;;
+\t\t*) printf '%s\\n' missing ;;
+\tesac
+}}
+
+watchdog_log_count()
+{{
+\t/bin/busybox dmesg 2>/dev/null |
+\t\t/bin/busybox grep -F -c "$1" 2>/dev/null || true
+}}
 
 (
 \tif ! exec 3>"$watchdog_device"; then
@@ -91,14 +108,15 @@ rm -f "$WATCHDOG_SHUTDOWN_REQUEST" "$WATCHDOG_SHUTDOWN_STATUS"
 \tping_count=0
 \twhile true; do
 \t\tif [ -f "$WATCHDOG_SHUTDOWN_REQUEST" ]; then
-\t\t\tnowayout="$(cat /sys/class/watchdog/watchdog0/nowayout 2>/dev/null || true)"
-\t\t\tstate_before="$(cat /sys/class/watchdog/watchdog0/state 2>/dev/null || true)"
-\t\t\tlog_a33x_watchdog "shutdown requested nowayout=${nowayout:-missing} state=${state_before:-missing}"
+\t\t\tnowayout="$(read_watchdog_nowayout)"
+\t\t\tstop_before="$(watchdog_log_count '{STOP_LOG}')"
+\t\t\tdid_not_stop_before="$(watchdog_log_count '{DID_NOT_STOP_LOG}')"
+\t\t\tlog_a33x_watchdog "shutdown requested nowayout=${{nowayout:-missing}} stop_before=${{stop_before:-missing}} did_not_stop_before=${{did_not_stop_before:-missing}}"
 
-\t\t\tif [ "$nowayout" != "0" ] || [ "$state_before" != "active" ]; then
-\t\t\t\tprintf '%s\\n' "refused-precondition" > "$WATCHDOG_SHUTDOWN_STATUS"
+\t\t\tif [ "$nowayout" != "0" ]; then
+\t\t\t\tprintf '%s\\n' "refused-nowayout-${{nowayout:-missing}}" > "$WATCHDOG_SHUTDOWN_STATUS"
 \t\t\t\trm -f "$WATCHDOG_SHUTDOWN_REQUEST"
-\t\t\t\tlog_a33x_watchdog "ERROR: refusing magic close nowayout=${nowayout:-missing} state=${state_before:-missing}"
+\t\t\t\tlog_a33x_watchdog "ERROR: refusing magic close nowayout=${{nowayout:-missing}} source=$WATCHDOG_NOWAYOUT_PARAMETER"
 \t\t\telse
 \t\t\t\tif ! printf 'V' >&3; then
 \t\t\t\t\tprintf '%s\\n' "failed-magic-write" > "$WATCHDOG_SHUTDOWN_STATUS"
@@ -106,21 +124,32 @@ rm -f "$WATCHDOG_SHUTDOWN_REQUEST" "$WATCHDOG_SHUTDOWN_STATUS"
 \t\t\t\t\tlog_a33x_watchdog "ERROR: magic-close write failed"
 \t\t\t\telse
 \t\t\t\t\texec 3>&-
-\t\t\t\t\tstate_after="$(cat /sys/class/watchdog/watchdog0/state 2>/dev/null || true)"
-\t\t\t\t\tlog_a33x_watchdog "magic close completed state=${state_after:-missing}"
-\t\t\t\t\tif [ "$state_after" = "inactive" ]; then
+\t\t\t\t\tsleep 1
+\t\t\t\t\tstop_after="$(watchdog_log_count '{STOP_LOG}')"
+\t\t\t\t\tdid_not_stop_after="$(watchdog_log_count '{DID_NOT_STOP_LOG}')"
+\t\t\t\t\tlog_a33x_watchdog "magic close observed stop_after=${{stop_after:-missing}} did_not_stop_after=${{did_not_stop_after:-missing}}"
+
+\t\t\t\t\tverified=no
+\t\t\t\t\tif [ -n "$stop_before" ] && [ -n "$stop_after" ] &&
+\t\t\t\t\t   [ -n "$did_not_stop_before" ] && [ -n "$did_not_stop_after" ] &&
+\t\t\t\t\t   [ "$stop_after" -gt "$stop_before" ] 2>/dev/null &&
+\t\t\t\t\t   [ "$did_not_stop_after" -eq "$did_not_stop_before" ] 2>/dev/null; then
+\t\t\t\t\t\tverified=yes
+\t\t\t\t\tfi
+
+\t\t\t\t\tif [ "$verified" = yes ]; then
 \t\t\t\t\t\tprintf '%s\\n' "stopped" > "$WATCHDOG_SHUTDOWN_STATUS"
-\t\t\t\t\t\tlog_a33x_watchdog "watchdog stopped for rootfs handoff"
+\t\t\t\t\t\tlog_a33x_watchdog "watchdog stopped for rootfs handoff; driver stop log verified"
 \t\t\t\t\t\texit 0
 \t\t\t\t\tfi
 
-\t\t\t\t\tlog_a33x_watchdog "ERROR: watchdog remained active after magic close; reopening"
+\t\t\t\t\tlog_a33x_watchdog "ERROR: watchdog stop was not proven; reopening and continuing to feed"
 \t\t\t\t\tif ! exec 3>"$watchdog_device"; then
 \t\t\t\t\t\tprintf '%s\\n' "failed-reopen" > "$WATCHDOG_SHUTDOWN_STATUS"
 \t\t\t\t\t\texit 1
 \t\t\t\t\tfi
 \t\t\t\t\tprintf 'K' >&3 || true
-\t\t\t\t\tprintf '%s\\n' "failed-active" > "$WATCHDOG_SHUTDOWN_STATUS"
+\t\t\t\t\tprintf '%s\\n' "failed-unverified-stop" > "$WATCHDOG_SHUTDOWN_STATUS"
 \t\t\t\t\trm -f "$WATCHDOG_SHUTDOWN_REQUEST"
 \t\t\t\tfi
 \t\t\tfi
@@ -150,6 +179,7 @@ INIT_ANCHOR = (
 
 HANDOFF_BLOCK = '''WATCHDOG_SHUTDOWN_REQUEST=/run/a33x-watchdog.shutdown-request
 WATCHDOG_SHUTDOWN_STATUS=/run/a33x-watchdog.shutdown-status
+WATCHDOG_PID_FILE=/run/a33x-watchdog.pid
 rm -f "$WATCHDOG_SHUTDOWN_STATUS"
 printf '<6>a33x-u0m-watchdog-handoff: stage=shutdown-request\\n' > /dev/kmsg 2>/dev/null || true
 printf '%s\\n' "shutdown" > "$WATCHDOG_SHUTDOWN_REQUEST"
@@ -160,14 +190,27 @@ while [ "$watchdog_attempt" -lt 20 ] && [ ! -s "$WATCHDOG_SHUTDOWN_STATUS" ]; do
 \tsleep 1
 done
 watchdog_status="$(cat "$WATCHDOG_SHUTDOWN_STATUS" 2>/dev/null || true)"
-watchdog_state="$(cat /sys/class/watchdog/watchdog0/state 2>/dev/null || true)"
-if [ "$watchdog_status" != "stopped" ] || [ "$watchdog_state" != "inactive" ]; then
-\tprintf '<3>a33x-u0m-watchdog-handoff: error=shutdown-failed status=%s state=%s\\n' "${watchdog_status:-missing}" "${watchdog_state:-missing}" > /dev/kmsg 2>/dev/null || true
-\techo "U0m refusal: watchdog shutdown failed status=${watchdog_status:-missing} state=${watchdog_state:-missing}"
+watchdog_pid="$(cat "$WATCHDOG_PID_FILE" 2>/dev/null || true)"
+watchdog_exit_attempt=0
+while [ "$watchdog_status" = "stopped" ] &&
+      [ "$watchdog_exit_attempt" -lt 5 ] &&
+      [ -n "$watchdog_pid" ] &&
+      /bin/busybox kill -0 "$watchdog_pid" 2>/dev/null; do
+\twatchdog_exit_attempt=$((watchdog_exit_attempt + 1))
+\tsleep 1
+done
+watchdog_alive=no
+if [ -n "$watchdog_pid" ] && /bin/busybox kill -0 "$watchdog_pid" 2>/dev/null; then
+\twatchdog_alive=yes
+fi
+if [ "$watchdog_status" != "stopped" ] || [ "$watchdog_alive" != "no" ]; then
+\tprintf '<3>a33x-u0m-watchdog-handoff: error=shutdown-failed status=%s alive=%s\\n' "${watchdog_status:-missing}" "$watchdog_alive" > /dev/kmsg 2>/dev/null || true
+\techo "U0m refusal: watchdog shutdown failed status=${watchdog_status:-missing} alive=$watchdog_alive"
 \twhile true; do sleep 3600; done
 fi
 printf '<6>a33x-u0m-watchdog-handoff: stage=shutdown-success\\n' > /dev/kmsg 2>/dev/null || true
-unset WATCHDOG_SHUTDOWN_REQUEST WATCHDOG_SHUTDOWN_STATUS watchdog_attempt watchdog_status watchdog_state
+unset WATCHDOG_SHUTDOWN_REQUEST WATCHDOG_SHUTDOWN_STATUS WATCHDOG_PID_FILE
+unset watchdog_attempt watchdog_status watchdog_pid watchdog_exit_attempt watchdog_alive
 '''
 
 
@@ -177,20 +220,27 @@ def patch_watchdog_hook(text: str) -> str:
     if "WATCHDOG_SHUTDOWN_REQUEST" in text or MARKER_PREFIX in text:
         refuse("watchdog handoff logic already exists in base hook")
     patched = text.replace(ORIGINAL_FEEDER_BLOCK, REPLACEMENT_FEEDER_BLOCK)
-    required = (
-        "WATCHDOG_SHUTDOWN_REQUEST=/run/a33x-watchdog.shutdown-request",
-        "WATCHDOG_SHUTDOWN_STATUS=/run/a33x-watchdog.shutdown-status",
-        "nowayout=",
-        "state_before=",
-        "printf 'V' >&3",
-        "exec 3>&-",
-        'state_after="$(cat /sys/class/watchdog/watchdog0/state',
-        'printf \'%s\\n\' "stopped" > "$WATCHDOG_SHUTDOWN_STATUS"',
-        "watchdog stopped for rootfs handoff",
+    required_counts = (
+        (f"WATCHDOG_NOWAYOUT_PARAMETER={NOWAYOUT_PARAMETER}", 1),
+        ("read_watchdog_nowayout()", 1),
+        ("N|n|0", 1),
+        ("Y|y|1", 1),
+        ("watchdog_log_count()", 1),
+        (STOP_LOG, 1),
+        (DID_NOT_STOP_LOG, 1),
+        ("printf 'V' >&3", 1),
+        ("exec 3>&-", 1),
+        ('printf \'%s\\n\' "stopped" > "$WATCHDOG_SHUTDOWN_STATUS"', 1),
+        ("driver stop log verified", 1),
+        ("failed-unverified-stop", 1),
     )
-    for token in required:
-        if patched.count(token) != 1:
-            refuse(f"patched watchdog hook contract is missing or duplicated: {token}")
+    for token, expected in required_counts:
+        actual = patched.count(token)
+        if actual != expected:
+            refuse(
+                "patched watchdog hook contract is missing or duplicated: "
+                f"token={token!r} actual={actual} expected={expected}"
+            )
     return patched
 
 
@@ -249,8 +299,8 @@ def assert_only_payloads_changed(before, after, expected: set[str]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Build U0m from exact U0l by performing a verified watchdog magic "
-            "close immediately before switch_root"
+            "Build U0m from exact U0l by performing a watchdog magic close "
+            "verified from the exact driver log immediately before switch_root"
         )
     )
     parser.add_argument("--root", type=Path, default=Path.home() / "a33-port")
@@ -283,8 +333,7 @@ def main() -> int:
 
     original_hook_entry = base.one(WATCHDOG_TARGET)
     original_init_entry = base.one(INIT_TARGET)
-    source_hook = WATCHDOG_SOURCE.read_bytes()
-    if original_hook_entry.data != source_hook:
+    if original_hook_entry.data != WATCHDOG_SOURCE.read_bytes():
         refuse("embedded U0l watchdog hook differs from the pinned source hook")
 
     original_hook = original_hook_entry.data.decode("utf-8", errors="strict")
@@ -296,14 +345,24 @@ def main() -> int:
     inspect_dir = root / "build/u0m-watchdog-magic-close-inspection"
     patch_report = root / "build/u0m-watchdog-magic-close-patch.txt"
     recovery_output = root / "build/pmos-debug-recovery-u0m-watchdog-magic-close"
-    candidate = root / "build/candidates/a33x-h1-usbpd-u0m-watchdog-magic-close-recovery.img"
-    manifest = root / "build/candidates/a33x-h1-usbpd-u0m-watchdog-magic-close-manifest.txt"
+    candidate = (
+        root
+        / "build/candidates/a33x-h1-usbpd-u0m-watchdog-magic-close-recovery.img"
+    )
+    manifest = (
+        root
+        / "build/candidates/a33x-h1-usbpd-u0m-watchdog-magic-close-manifest.txt"
+    )
 
     inspect_dir.mkdir(parents=True, exist_ok=True)
-    (inspect_dir / "original-watchdog-hook.sh").write_text(original_hook, encoding="utf-8")
+    (inspect_dir / "original-watchdog-hook.sh").write_text(
+        original_hook, encoding="utf-8"
+    )
     hook_syntax = inspect_dir / "patched-watchdog-hook.sh"
     hook_syntax.write_text(patched_hook, encoding="utf-8")
-    (inspect_dir / "original-init_2nd.sh").write_text(original_init, encoding="utf-8")
+    (inspect_dir / "original-init_2nd.sh").write_text(
+        original_init, encoding="utf-8"
+    )
     init_syntax = inspect_dir / "patched-init_2nd.sh"
     init_syntax.write_text(patched_init, encoding="utf-8")
     subprocess.run(["sh", "-n", str(hook_syntax)], check=True)
@@ -358,6 +417,13 @@ def main() -> int:
         ("watchdog_nowayout_required", "0"),
         ("watchdog_state_before_required", "active"),
         ("watchdog_state_after_required", "inactive"),
+        ("watchdog_nowayout_source", NOWAYOUT_PARAMETER),
+        (
+            "watchdog_stop_verification",
+            "driver-stop-log-increment-and-no-did-not-stop-increment",
+        ),
+        ("watchdog_sysfs_class_state_required", "no"),
+        ("watchdog_feeder_exit_required", "yes"),
         ("watchdog_failure_behavior", "continue-feeding-and-refuse-switch-root"),
         ("rootfs_persistent_delta", "none"),
         ("runtime_mount_delta", "retain-u0l-openrc-cgroup-mask"),
