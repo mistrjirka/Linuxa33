@@ -44,7 +44,7 @@ assert module.section(fixture, "reboot_links") == ["lrwxrwxrwx /sbin/reboot"]
 script = module.REMOTE_SCRIPT
 for required in (
     "cat /proc/sys/kernel/random/boot_id",
-    "cat /proc/uptime",
+    "cut -d' ' -f1 /proc/uptime",
     "command -v twrp",
     "twrp help",
     "command -v reboot",
