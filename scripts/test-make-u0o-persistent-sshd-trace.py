@@ -69,9 +69,15 @@ assert patched.count('u0o_pre_trace 3 "error=$1"') == 1
 assert patched.count('event=monitor-complete') == 1
 assert patched.count('schedule=0,1,2,5,10,20,30,60') == 2
 assert patched.count(': > "$U0O_TRACE"') == 1
-assert "rm -rf \"/sysroot\"" not in patched
-assert "mount -o remount,rw /sysroot" not in patched
-assert "> /sysroot/etc/" not in patched
+for forbidden in (
+    'rm -rf "/sysroot"',
+    "mount -o remount,rw /sysroot",
+    "> /sysroot/etc/",
+    "dd if=",
+    "mkfs",
+    "wipefs",
+):
+    assert forbidden not in patched, forbidden
 
 with tempfile.TemporaryDirectory() as temporary:
     path = Path(temporary) / "u0o-init.sh"
@@ -91,9 +97,6 @@ for required in (
     assert required in source, required
 for forbidden in (
     "adb reboot",
-    "dd if=",
-    "mkfs",
-    "wipefs",
     "fastboot",
     "odin4",
 ):
