@@ -20,12 +20,18 @@ patched_watchdog = module.patch_watchdog_hook(watchdog_fixture)
 assert patched_watchdog.startswith("#!/bin/sh\n")
 assert patched_watchdog.count("printf 'V' >&3") == 1
 assert patched_watchdog.count("exec 3>&-") == 1
-assert patched_watchdog.count("watchdog0/nowayout") == 1
-assert patched_watchdog.count("watchdog0/state") == 2
+assert patched_watchdog.count(module.NOWAYOUT_PARAMETER) == 1
+assert "/sys/class/watchdog/watchdog0/state" not in patched_watchdog
+assert "N|n|0" in patched_watchdog
+assert "Y|y|1" in patched_watchdog
+assert patched_watchdog.count(module.STOP_LOG) == 1
+assert patched_watchdog.count(module.DID_NOT_STOP_LOG) == 1
 assert patched_watchdog.count('"stopped" > "$WATCHDOG_SHUTDOWN_STATUS"') == 1
+assert "driver stop log verified" in patched_watchdog
+assert "failed-unverified-stop" in patched_watchdog
+assert "/bin/busybox dmesg" in patched_watchdog
 assert "sleep 8" not in patched_watchdog
 assert "sleep 1" in patched_watchdog
-assert "continue-feeding" not in patched_watchdog
 
 switch_marker = (
     "printf '<6>a33x-u0k-direct-mount: stage=switch-root-begin\\n' "
@@ -41,7 +47,9 @@ patched_init = module.patch_init_second(init_fixture)
 assert patched_init.count("stage=shutdown-request") == 1
 assert patched_init.count("stage=shutdown-success") == 1
 assert patched_init.count("shutdown-failed") == 1
-assert patched_init.count("watchdog0/state") == 1
+assert "watchdog0/state" not in patched_init
+assert patched_init.count("/bin/busybox kill -0") == 2
+assert "watchdog_alive" in patched_init
 assert patched_init.index("stage=shutdown-success") < patched_init.index(
     "stage=switch-root-begin"
 )
@@ -96,8 +104,11 @@ assert module.MARKERS == ("shutdown-request", "shutdown-success")
 print("a33_u0m_watchdog_magic_close_self_test=passed")
 print("exact_u0l_watchdog_block_patch=passed")
 print("magic_close_V_and_fd_close_contract=passed")
-print("nowayout_and_state_preconditions=passed")
-print("failed_shutdown_continues_feeding_contract=passed")
+print("module_nowayout_normalization=passed")
+print("driver_stop_log_verification=passed")
+print("missing_watchdog_class_attributes_not_required=passed")
+print("failed_shutdown_reopens_and_continues_feeding=passed")
+print("feeder_exit_before_switch_root=passed")
 print("shutdown_before_switch_root_order=passed")
 print("shell_syntax_validation=passed")
 print("missing_duplicate_anchor_refusal=passed")
