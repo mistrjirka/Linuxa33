@@ -15,10 +15,16 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 assert module.EXPECTED_BASE_BLOB == "d3c15477af1bb53e0890637f16eafc865a2d0368"
+assert module.EXPECTED_HELPER_BLOB == "2232f92bbf2782aed88acd9246ed063148ca63a8"
 assert module.EXACT_USERDATA == "/dev/block/sda36"
 assert module.base.common.EXPECTED_USERDATA == module.EXACT_USERDATA
+assert module.helper.EXACT_NODE == module.EXACT_USERDATA
 module.configure_exact_userdata()
 assert module.base.common.USERDATA == module.EXACT_USERDATA
+
+assert module.adb_argument([]) == "adb"
+assert module.adb_argument(["--adb", "/tmp/adb"]) == "/tmp/adb"
+assert module.adb_argument(["--adb=/tmp/adb2"]) == "/tmp/adb2"
 
 live_script = module.base.common.LIVE_SCRIPT
 assert 'target="$1"' in live_script
@@ -32,6 +38,13 @@ assert "readonly_verification=passed" in verify_script
 assert "readonly_unmount=passed" in verify_script
 
 source = MODULE.read_text(encoding="utf-8")
+for required in (
+    "helper.prepare(base.common, adb, serial)",
+    "helper.cleanup(base.common, adb, serial, state)",
+    "exact_block_node_cleanup=passed",
+    "ephemeral_device_node_write=/dev-tmpfs-only",
+):
+    assert required in source, required
 for forbidden in (
     "/dev/block/by-name/userdata",
     "execute_flash(",
@@ -44,8 +57,9 @@ for forbidden in (
     assert forbidden not in source
 
 print("a33_installed_rootfs_readonly_v2_self_test=passed")
-print("exact_userdata_node_override=passed")
-print("base_blob_identity_pinned=passed")
+print("exact_userdata_node_reconstruction=passed")
+print("base_and_helper_blob_identities_pinned=passed")
+print("cleanup_finally_contract=passed")
 print("live_state_direct_target_contract=passed")
 print("read_only_verify_contract_preserved=passed")
-print("phone_write_flash_and_reboot_absence=passed")
+print("phone_partition_write_flash_and_reboot_absence=passed")
