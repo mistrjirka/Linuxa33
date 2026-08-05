@@ -10,9 +10,11 @@ HERE = Path(__file__).resolve().parent
 BASE = HERE / "validate-a33-installed-rootfs-read-only.py"
 HELPER = HERE / "lib/a33_exact_block_node.py"
 EXT4_IDENTITY = HERE / "lib/a33_ext4_identity_text.py"
+ROOTFS_VERIFY = HERE / "lib/a33_rootfs_safe_verify.py"
 EXPECTED_BASE_BLOB = "d3c15477af1bb53e0890637f16eafc865a2d0368"
 EXPECTED_HELPER_BLOB = "2232f92bbf2782aed88acd9246ed063148ca63a8"
 EXPECTED_EXT4_IDENTITY_BLOB = "547aa185c56cfdefe09efab2ba1fbe1e63950de0"
+EXPECTED_ROOTFS_VERIFY_BLOB = "3968d9b2a439ac222b652a79306e611d23525579"
 EXACT_USERDATA = "/dev/block/sda36"
 
 
@@ -29,6 +31,7 @@ def load(name: str, path: Path):
 base = load("a33_installed_rootfs_readonly_v2_base", BASE)
 helper = load("a33_installed_rootfs_readonly_v2_exact_node", HELPER)
 ext4_identity = load("a33_installed_rootfs_readonly_v2_ext4_identity", EXT4_IDENTITY)
+rootfs_verify = load("a33_installed_rootfs_readonly_v2_rootfs_verify", ROOTFS_VERIFY)
 
 
 def adb_argument(argv: list[str]) -> str:
@@ -60,6 +63,7 @@ def configure_exact_userdata() -> None:
     base.common.ext4_identity = lambda adb, serial: ext4_identity.ext4_identity(
         base.common, adb, serial
     )
+    base.common.VERIFY_SCRIPT = rootfs_verify.ROOTFS_SAFE_VERIFY_SCRIPT
 
 
 def main() -> int:
@@ -68,6 +72,7 @@ def main() -> int:
         (BASE, EXPECTED_BASE_BLOB),
         (HELPER, EXPECTED_HELPER_BLOB),
         (EXT4_IDENTITY, EXPECTED_EXT4_IDENTITY_BLOB),
+        (ROOTFS_VERIFY, EXPECTED_ROOTFS_VERIFY_BLOB),
     ):
         actual = base.git_blob(repo, path)
         if actual != expected:
@@ -86,6 +91,7 @@ def main() -> int:
     print(f"exact_block_node_kernel_dev={state.kernel_dev}")
     print("ephemeral_device_node_write=/dev-tmpfs-only")
     print("ext4_identity_transport=adb-shell-base64")
+    print("rootfs_path_resolution=rootfs-relative-symlink-safe")
     try:
         return base.main()
     finally:
