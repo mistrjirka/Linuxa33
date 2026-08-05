@@ -16,6 +16,7 @@ spec.loader.exec_module(module)
 
 assert module.EXPECTED_BASE_BLOB == "78a7e93678f34cb2a038a76b7bf8716bb6b6a64c"
 assert module.EXPECTED_HELPER_BLOB == "2232f92bbf2782aed88acd9246ed063148ca63a8"
+assert module.EXPECTED_EXT4_IDENTITY_BLOB == "547aa185c56cfdefe09efab2ba1fbe1e63950de0"
 assert module.helper.EXACT_NODE == module.base.EXACT_USERDATA
 assert module.adb_argument([]) == "adb"
 assert module.adb_argument(["--adb", "/tmp/adb"]) == "/tmp/adb"
@@ -25,6 +26,8 @@ source = MODULE.read_text(encoding="utf-8")
 for required in (
     "helper.prepare(common, adb, serial)",
     "helper.cleanup(common, adb, serial, state)",
+    "ext4_identity.ext4_identity",
+    "ext4_identity_transport=adb-shell-base64",
     "exact_block_node_cleanup=passed",
     "ephemeral_device_node_write=/dev-tmpfs-only",
     "return base.main()",
@@ -48,8 +51,15 @@ assert "mount -t ext4 -o ro,noload,nosuid,nodev,noatime" in remote_script
 assert "readonly_mount=passed" in remote_script
 assert "readonly_unmount=passed" in remote_script
 
+identity_script = module.ext4_identity.READ_SCRIPT
+assert 'dd if="$target" of="$payload" bs=2048 count=1' in identity_script
+assert 'base64 "$payload"' in identity_script
+assert "phone_partition_writes=no" in identity_script
+assert 'of="$target"' not in identity_script
+
 print("a33_installed_ssh_v4_self_test=passed")
-print("v3_inspector_and_exact_node_helper_pinned=passed")
+print("v3_inspector_block_and_identity_helpers_pinned=passed")
+print("text_safe_ext4_identity_override=passed")
 print("ephemeral_node_prepare_and_finally_cleanup=passed")
 print("read_only_inspection_contract_preserved=passed")
 print("phone_partition_write_and_reboot_absence=passed")
