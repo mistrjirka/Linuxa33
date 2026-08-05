@@ -7,7 +7,7 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 BASE = HERE / "provision-a33-ssh-host-keys.py"
-EXPECTED_BASE_BLOB = "04c6b6827cd12867f73328ef41084a13e17e01d3"
+EXPECTED_BASE_BLOB = "535bfd2bb920e6ee1c6d82e756e327bb0b7f58a5"
 
 spec = importlib.util.spec_from_file_location("a33_ssh_host_key_provision_v2_base", BASE)
 if spec is None or spec.loader is None:
