@@ -17,7 +17,7 @@ assert module.EXPECTED_U0M_BUILDER_BLOB == (
     "19cb63ea55ecfb7a186016058b7303b4326c9030"
 )
 assert module.EXPECTED_U0M_AUDIT_V2_BLOB == (
-    "80cee6825ea96ef18799ab46828d9f3fb0b566cd"
+    "caba191f58b9642dcfab5ecc79c0aae5099e104e"
 )
 assert module.base.U0M_AUDIT == module.AUDIT_V2
 assert module.base.EXPECTED_U0M_BUILDER_BLOB == module.EXPECTED_U0M_BUILDER_BLOB
