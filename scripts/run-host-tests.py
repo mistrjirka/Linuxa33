@@ -11,6 +11,17 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 TESTS = ROOT / "tests"
 
+# These are executable runtime diagnostics whose replacement imports the exact
+# base implementation and applies a pinned compatibility correction. Running
+# both would execute the obsolete phone-facing path as a second independent
+# test and can produce a known false failure before the corrected replacement
+# runs. The replacement itself remains part of the legacy test suite.
+SUPERSEDED_LEGACY_TESTS: dict[str, str] = {
+    "test-a33-installed-ssh-keygen-tmpfs.py": (
+        "test-a33-installed-ssh-keygen-tmpfs-v2.py"
+    ),
+}
+
 
 def run_command(args: list[str], *, timeout: int = 120) -> int:
     env = os.environ.copy()
@@ -41,6 +52,22 @@ def run_command(args: list[str], *, timeout: int = 120) -> int:
     print(completed.stdout, end="")
     print(completed.stderr, end="", file=sys.stderr)
     return completed.returncode
+
+
+def discover_legacy_tests(scripts: Path = SCRIPTS) -> tuple[list[Path], list[tuple[str, str]]]:
+    discovered = sorted(scripts.glob("test-*.py"))
+    names = {path.name for path in discovered}
+    skipped: list[tuple[str, str]] = []
+    selected: list[Path] = []
+
+    for test in discovered:
+        replacement = SUPERSEDED_LEGACY_TESTS.get(test.name)
+        if replacement is not None and replacement in names:
+            skipped.append((test.name, replacement))
+            continue
+        selected.append(test)
+
+    return selected, skipped
 
 
 def main() -> int:
@@ -75,11 +102,17 @@ def main() -> int:
         if rc != 0:
             failures.append(("unittest-discovery", rc))
 
-    legacy_tests = sorted(SCRIPTS.glob("test-*.py"))
+    legacy_tests, skipped_tests = discover_legacy_tests()
     if not legacy_tests:
         failures.append(("legacy-tests:none-found", 1))
 
     print(f"\n=== Run {len(legacy_tests)} legacy host test scripts ===")
+    for old_name, replacement in skipped_tests:
+        print(
+            "superseded_legacy_test_skipped="
+            f"{old_name} replacement={replacement}"
+        )
+
     for test in legacy_tests:
         relative = str(test.relative_to(ROOT))
         print(f"\n--- {relative} ---", flush=True)
@@ -90,6 +123,7 @@ def main() -> int:
     print("\n=== Host test summary ===")
     print(f"discoverable_test_suite={'present' if TESTS.is_dir() else 'missing'}")
     print(f"legacy_test_count={len(legacy_tests)}")
+    print(f"superseded_legacy_test_count={len(skipped_tests)}")
     print(f"host_test_failures={len(failures)}")
     if failures:
         for name, rc in failures:
