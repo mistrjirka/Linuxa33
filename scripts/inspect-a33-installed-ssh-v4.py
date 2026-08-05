@@ -9,8 +9,10 @@ import sys
 HERE = Path(__file__).resolve().parent
 BASE = HERE / "inspect-a33-installed-ssh-v3.py"
 HELPER = HERE / "lib/a33_exact_block_node.py"
+EXT4_IDENTITY = HERE / "lib/a33_ext4_identity_text.py"
 EXPECTED_BASE_BLOB = "78a7e93678f34cb2a038a76b7bf8716bb6b6a64c"
 EXPECTED_HELPER_BLOB = "2232f92bbf2782aed88acd9246ed063148ca63a8"
+EXPECTED_EXT4_IDENTITY_BLOB = "547aa185c56cfdefe09efab2ba1fbe1e63950de0"
 
 
 def load(name: str, path: Path):
@@ -25,6 +27,7 @@ def load(name: str, path: Path):
 
 base = load("a33_installed_ssh_v4_base", BASE)
 helper = load("a33_installed_ssh_v4_exact_node", HELPER)
+ext4_identity = load("a33_installed_ssh_v4_ext4_identity", EXT4_IDENTITY)
 common = base.common
 
 
@@ -58,6 +61,7 @@ def main() -> int:
     for path, expected in (
         (BASE, EXPECTED_BASE_BLOB),
         (HELPER, EXPECTED_HELPER_BLOB),
+        (EXT4_IDENTITY, EXPECTED_EXT4_IDENTITY_BLOB),
     ):
         actual = git_blob(repo, path)
         if actual != expected:
@@ -72,6 +76,9 @@ def main() -> int:
             f"inspector={base.EXACT_USERDATA!r} helper={helper.EXACT_NODE!r}"
         )
 
+    common.ext4_identity = lambda adb, serial: ext4_identity.ext4_identity(
+        common, adb, serial
+    )
     adb_value = adb_argument(sys.argv[1:])
     adb = shutil.which(adb_value) or adb_value
     serial = common.select_recovery(adb, 30)
@@ -80,6 +87,7 @@ def main() -> int:
     print(f"exact_block_node_created={'yes' if state.created else 'no'}")
     print(f"exact_block_node_kernel_dev={state.kernel_dev}")
     print("ephemeral_device_node_write=/dev-tmpfs-only")
+    print("ext4_identity_transport=adb-shell-base64")
     try:
         return base.main()
     finally:
@@ -103,6 +111,7 @@ if __name__ == "__main__":
         base.base.base.InspectionError,
         common.Refusal,
         helper.ExactBlockNodeError,
+        ext4_identity.Ext4IdentityError,
         OSError,
         ValueError,
     ) as exc:
