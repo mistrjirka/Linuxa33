@@ -15,7 +15,7 @@ module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
-assert module.EXPECTED_BASE_BLOB == "bb5865f150369bba3da81c291e22a15c663c929d" if False else "bb5865f150369fdf2ce269cfc4b2bba107e7cfd0"
+assert module.EXPECTED_BASE_BLOB == "bb5865f150369fdf2ce269cfc4b2bba107e7cfd0"
 assert module.EXPECTED_KERNEL_RELEASE == "5.10.66-Gabriel260BR-TWRP-ga0103aac9499"
 assert module.EXPECTED_CONFIG_GZ_SHA256 == (
     "7dd732d5b653571497e3e77d286705efc5b4247dcdc937afffc54827b4f3997c"
@@ -58,7 +58,7 @@ for required in (
     'kill -TERM "$pid"',
     'kill -KILL "$pid"',
     'mount -o remount,ro "$root"',
-    'for point in \\',
+    "for point in",
     '"$root/run"',
     '"$root/sys"',
     '"$root/proc"',
