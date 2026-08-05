@@ -8,24 +8,25 @@ import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
-MODULE = HERE / "make-u0m-watchdog-magic-close.py"
-spec = importlib.util.spec_from_file_location("a33_u0m_builder_test", MODULE)
+MODULE = HERE / "make-u0m-watchdog-magic-close-v2.py"
+spec = importlib.util.spec_from_file_location("a33_u0m_builder_v2_test", MODULE)
 assert spec and spec.loader
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
+base = module.base
 
-watchdog_fixture = "#!/bin/sh\n" + module.ORIGINAL_FEEDER_BLOCK
+watchdog_fixture = "#!/bin/sh\n" + base.ORIGINAL_FEEDER_BLOCK
 patched_watchdog = module.patch_watchdog_hook(watchdog_fixture)
 assert patched_watchdog.startswith("#!/bin/sh\n")
 assert patched_watchdog.count("printf 'V' >&3") == 1
 assert patched_watchdog.count("exec 3>&-") == 1
-assert patched_watchdog.count(module.NOWAYOUT_PARAMETER) == 1
+assert patched_watchdog.count(base.NOWAYOUT_PARAMETER) == 1
 assert "/sys/class/watchdog/watchdog0/state" not in patched_watchdog
 assert "N|n|0" in patched_watchdog
 assert "Y|y|1" in patched_watchdog
-assert patched_watchdog.count(module.STOP_LOG) == 1
-assert patched_watchdog.count(module.DID_NOT_STOP_LOG) == 1
+assert patched_watchdog.count(base.STOP_LOG) == 2
+assert patched_watchdog.count(base.DID_NOT_STOP_LOG) == 2
 assert patched_watchdog.count('"stopped" > "$WATCHDOG_SHUTDOWN_STATUS"') == 1
 assert "driver stop log verified" in patched_watchdog
 assert "failed-unverified-stop" in patched_watchdog
@@ -39,11 +40,11 @@ switch_marker = (
 )
 init_fixture = (
     "#!/bin/sh\n"
-    + module.INIT_ANCHOR
+    + base.INIT_ANCHOR
     + switch_marker
     + 'exec switch_root /sysroot "$init"\n'
 )
-patched_init = module.patch_init_second(init_fixture)
+patched_init = base.patch_init_second(init_fixture)
 assert patched_init.count("stage=shutdown-request") == 1
 assert patched_init.count("stage=shutdown-success") == 1
 assert patched_init.count("shutdown-failed") == 1
@@ -67,41 +68,41 @@ with tempfile.TemporaryDirectory() as temp:
     subprocess.run(["sh", "-n", str(init_path)], check=True)
 
 for bad in (
-    watchdog_fixture.replace(module.ORIGINAL_FEEDER_BLOCK, ""),
-    watchdog_fixture + module.ORIGINAL_FEEDER_BLOCK,
+    watchdog_fixture.replace(base.ORIGINAL_FEEDER_BLOCK, ""),
+    watchdog_fixture + base.ORIGINAL_FEEDER_BLOCK,
     watchdog_fixture.replace("#!/bin/sh\n", "#!/bin/sh\nWATCHDOG_SHUTDOWN_REQUEST=x\n"),
 ):
     try:
         module.patch_watchdog_hook(bad)
-    except module.Refusal:
+    except base.Refusal:
         pass
     else:
         raise AssertionError("unsafe U0m watchdog fixture was accepted")
 
 for bad in (
-    init_fixture.replace(module.INIT_ANCHOR, ""),
-    init_fixture.replace(module.INIT_ANCHOR, module.INIT_ANCHOR * 2),
-    init_fixture.replace("#!/bin/sh\n", f"#!/bin/sh\n# {module.MARKER_PREFIX}\n"),
+    init_fixture.replace(base.INIT_ANCHOR, ""),
+    init_fixture.replace(base.INIT_ANCHOR, base.INIT_ANCHOR * 2),
+    init_fixture.replace("#!/bin/sh\n", f"#!/bin/sh\n# {base.MARKER_PREFIX}\n"),
 ):
     try:
-        module.patch_init_second(bad)
-    except module.Refusal:
+        base.patch_init_second(bad)
+    except base.Refusal:
         pass
     else:
         raise AssertionError("unsafe U0m init fixture was accepted")
 
-assert module.EXPECTED_U0L_BUILDER_BLOB == (
+assert base.EXPECTED_U0L_BUILDER_BLOB == (
     "6c3133d5efbbdf08c3197eae3693d215fbf1b642"
 )
-assert module.EXPECTED_U0L_FLASH_BLOB == (
+assert base.EXPECTED_U0L_FLASH_BLOB == (
     "0c8ed99e7d1e75b42cf54921f7f217cad6c4f845"
 )
-assert module.EXPECTED_WATCHDOG_SOURCE_BLOB == (
+assert base.EXPECTED_WATCHDOG_SOURCE_BLOB == (
     "ed779bb8ee90a9f64438a679923a852829bc5fb0"
 )
-assert module.MARKERS == ("shutdown-request", "shutdown-success")
+assert base.MARKERS == ("shutdown-request", "shutdown-success")
 
-print("a33_u0m_watchdog_magic_close_self_test=passed")
+print("a33_u0m_watchdog_magic_close_v2_self_test=passed")
 print("exact_u0l_watchdog_block_patch=passed")
 print("magic_close_V_and_fd_close_contract=passed")
 print("module_nowayout_normalization=passed")
