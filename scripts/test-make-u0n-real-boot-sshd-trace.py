@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -70,9 +71,9 @@ for required in (
     assert required in instrumented, required
 assert "default_start" not in instrumented[len(fixture):]
 assert "default_stop" not in instrumented[len(fixture):]
-assert instrumented.count("update_command()") == 1
-assert instrumented.count("checkconfig()") == 1
-assert instrumented.count("start_pre()") == 1
+for name in ("update_command", "checkconfig", "start_pre"):
+    assert len(re.findall(rf"(?m)^{name}\(\)[ \t]*\{{", instrumented)) == 1
+    assert len(re.findall(rf"(?m)^u0n_original_{name}\(\)[ \t]*\{{", instrumented)) == 1
 
 base_init = (
     "#!/bin/sh\n"
@@ -87,7 +88,7 @@ for required in (
     "a33x-u0n-real-boot-sshd: stage=setup-success",
     "a33x-u0n-real-boot-sshd: stage=switch-root-ready",
     'mount -o bind "$U0N_SSHD_SOURCE" "$U0N_SSHD_TARGET"',
-    "best-effort" if False else "show_splash",
+    "show_splash",
     'exec switch_root /sysroot "$init"',
 ):
     assert required in patched_init, required
