@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve().parent
 BASE = HERE / "flash-a33-u0m-watchdog-magic-close.py"
 AUDIT_V2 = HERE / "audit-a33-u0m-candidate-v2.py"
 EXPECTED_U0M_BUILDER_BLOB = "19cb63ea55ecfb7a186016058b7303b4326c9030"
-EXPECTED_U0M_AUDIT_V2_BLOB = "80cee6825ea96ef18799ab46828d9f3fb0b566cd"
+EXPECTED_U0M_AUDIT_V2_BLOB = "caba191f58b9642dcfab5ecc79c0aae5099e104e"
 
 spec = importlib.util.spec_from_file_location("a33_u0m_flash_v2_base", BASE)
 if spec is None or spec.loader is None:
