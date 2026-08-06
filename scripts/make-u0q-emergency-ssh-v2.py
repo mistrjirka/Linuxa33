@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import gzip
 import importlib.util
 from pathlib import Path
@@ -47,6 +48,14 @@ def git_blob(repo: Path, path: Path) -> str:
         stderr=subprocess.PIPE,
         check=True,
     ).stdout.strip()
+
+
+def selected_paths() -> tuple[Path, Path]:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--root", type=Path, default=Path.home() / "a33-port")
+    parser.add_argument("--repo", type=Path, default=Path.home() / "Linuxa33")
+    args, _ = parser.parse_known_args()
+    return args.root.expanduser().resolve(), args.repo.expanduser().resolve()
 
 
 def network_script() -> str:
@@ -212,20 +221,21 @@ def validate_generated_payload(root: Path) -> None:
     except (OSError, base.v2.CpioError) as exc:
         refuse(f"cannot parse generated U0q v2 initramfs: {exc}")
     init_text = archive.one(base.INIT_TARGET).data.decode("utf-8", errors="strict")
-    for token in (
+    unique_tokens = (
         "run-is-not-a-mounted-runtime-filesystem",
         f"event=runtime-directory-ready path={PRIVSEP_PATH}",
         "event=runtime-firewall-rule-added",
-        FIREWALL_COMMENT,
-    ):
+        "nft insert rule inet filter input tcp dport 2222 accept",
+    )
+    for token in unique_tokens:
         if init_text.count(token) != 1:
             refuse(f"generated U0q v2 token missing or duplicated: {token}")
-    if init_text.count("nft insert rule inet filter input tcp dport 2222 accept") != 1:
-        refuse("generated U0q v2 firewall rule is absent or duplicated")
+    if init_text.count(FIREWALL_COMMENT) != 2:
+        refuse("generated U0q v2 firewall marker must occur in detection and rule")
 
 
 def main() -> int:
-    repo = Path.home() / "Linuxa33"
+    root, repo = selected_paths()
     if git_blob(repo, BASE_PATH) != EXPECTED_BASE_BLOB:
         refuse("checked-in U0q base builder changed")
 
@@ -241,7 +251,6 @@ def main() -> int:
     if result != 0:
         return result
 
-    root = Path.home() / "a33-port"
     validate_generated_payload(root)
     patch = root / "build/u0q-emergency-ssh-patch.txt"
     manifest = root / "build/candidates/a33x-h1-usbpd-u0q-emergency-ssh-manifest.txt"
