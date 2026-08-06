@@ -18,7 +18,7 @@ assert module.EXPECTED_BASE_AUDIT_BLOB == (
     "f52f01d8c878ed24aaae3f508f6e8e82663971e3"
 )
 assert module.EXPECTED_BUILDER_V2_BLOB == (
-    "60d91c8a83722c32511219eed0e2625ec35d3f3e"
+    "63d3d9c548847b6ad710f29844265359e401185d"
 )
 assert module.REPORT_NAME == "a33-u0q-candidate-audit-v2.txt"
 assert module.V2_FIELDS == {
@@ -26,6 +26,11 @@ assert module.V2_FIELDS == {
     "emergency_runtime_mount_required": "/run",
     "emergency_privsep_path": "/run/sshd",
     "emergency_privsep_backing": "preexisting-mounted-run",
+    "emergency_pre_switch_root_gate": (
+        "network-address-and-port-2222-listener"
+    ),
+    "emergency_pre_switch_root_timeout_seconds": "150",
+    "emergency_network_ready_path": "/run/a33x-u0q-network-ready",
     "emergency_firewall_policy": "runtime-nft-monitor",
     "emergency_firewall_rule_comment": "a33x-u0q-emergency-2222",
     "emergency_firewall_persistent_delta": "none",
@@ -38,10 +43,17 @@ fixture = "\n".join(
         "event=runtime-directory-ready path=/run/sshd backing=mounted-run revision=2",
         "event=network-helper-spawned",
         "event=config-test-start port=2222",
+        "event=network-ready-marker-written path=/run/a33x-u0q-network-ready",
         "grep a33x-u0q-emergency-2222",
-        "nft insert rule inet filter input tcp dport 2222 accept comment a33x-u0q-emergency-2222",
+        (
+            "nft insert rule inet filter input tcp dport 2222 accept "
+            "comment a33x-u0q-emergency-2222"
+        ),
         "event=runtime-firewall-rule-added",
         "event=sshd-helper-spawned",
+        "event=pre-switch-root-wait network=yes listener=yes wait=0",
+        "event=pre-switch-root-ready interface=usb0 listener=yes port=2222 wait=0",
+        "emergency-channel-readiness-timeout",
         'exec switch_root /sysroot "$init"',
         "run-is-not-a-mounted-runtime-filesystem",
     )
@@ -57,6 +69,10 @@ for required in (
     "require_v2_fields(patch",
     "verify_payload_text(init_text)",
     "base U0q exact-delta audit",
+    "emergency_pre_switch_root_gate",
+    "emergency_pre_switch_root_timeout_seconds",
+    "emergency_network_ready_path",
+    "pre_switch_root_live_channel_gate_verified",
     "persistent_firewall_file_delta",
     "normal_openrc_sshd_instrumentation_byte_identical",
     "u0p_watchdog_hook_byte_identical",
@@ -78,6 +94,7 @@ print("a33_u0q_v2_audit_self_test=passed")
 print("base_audit_and_v2_builder_blob_pins=passed")
 print("full_base_exact_delta_audit_reexecution_contract=passed")
 print("mounted_run_privsep_order_contract=passed")
+print("pre_switch_root_live_channel_gate_contract=passed")
 print("runtime_only_firewall_contract=passed")
 print("persistent_firewall_file_delta_absence=passed")
 print("kernel_dtb_recovery_dtbo_watchdog_identity_contract=passed")
