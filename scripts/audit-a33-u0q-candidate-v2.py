@@ -12,7 +12,7 @@ HERE = Path(__file__).resolve().parent
 BASE_AUDIT_PATH = HERE / "audit-a33-u0q-candidate.py"
 BUILDER_V2_PATH = HERE / "make-u0q-emergency-ssh-v2.py"
 EXPECTED_BASE_AUDIT_BLOB = "f52f01d8c878ed24aaae3f508f6e8e82663971e3"
-EXPECTED_BUILDER_V2_BLOB = "60d91c8a83722c32511219eed0e2625ec35d3f3e"
+EXPECTED_BUILDER_V2_BLOB = "63d3dcd9f75fda918768722c5f1d673dfeb81cd2"
 REPORT_NAME = "a33-u0q-candidate-audit-v2.txt"
 
 
@@ -54,6 +54,11 @@ V2_FIELDS = {
     "emergency_runtime_mount_required": "/run",
     "emergency_privsep_path": builder_v2.PRIVSEP_PATH,
     "emergency_privsep_backing": "preexisting-mounted-run",
+    "emergency_pre_switch_root_gate": "network-address-and-port-2222-listener",
+    "emergency_pre_switch_root_timeout_seconds": str(
+        builder_v2.READY_TIMEOUT_SECONDS
+    ),
+    "emergency_network_ready_path": builder_v2.NETWORK_READY_PATH,
     "emergency_firewall_policy": "runtime-nft-monitor",
     "emergency_firewall_rule_comment": builder_v2.FIREWALL_COMMENT,
     "emergency_firewall_persistent_delta": "none",
@@ -68,6 +73,9 @@ def verify_payload_text(init_text: str) -> None:
     unique = (
         "run-is-not-a-mounted-runtime-filesystem",
         f"event=runtime-directory-ready path={builder_v2.PRIVSEP_PATH}",
+        f"event=network-ready-marker-written path={builder_v2.NETWORK_READY_PATH}",
+        "event=pre-switch-root-ready",
+        "emergency-channel-readiness-timeout",
         "nft insert rule inet filter input tcp dport 2222 accept",
         "event=runtime-firewall-rule-added",
     )
@@ -83,10 +91,11 @@ def verify_payload_text(init_text: str) -> None:
         init_text.index("event=network-helper-spawned"),
         init_text.index("event=config-test-start port=2222"),
         init_text.index("event=sshd-helper-spawned"),
+        init_text.index("event=pre-switch-root-ready"),
         init_text.index('exec switch_root /sysroot "$init"'),
     )
     if tuple(sorted(order)) != order:
-        fail("U0q v2 runtime preparation is not ordered before switch_root")
+        fail("U0q v2 readiness gate is not ordered before switch_root")
 
     forbidden = (
         "/etc/nftables.d/",
@@ -195,6 +204,7 @@ def main() -> int:
         ("base_audit_report_sha256", v2.sha_file(base_report)),
         *V2_FIELDS.items(),
         ("runtime_directory_order_verified", "yes"),
+        ("pre_switch_root_live_channel_gate_verified", "yes"),
         ("runtime_firewall_rule_count", "1"),
         ("runtime_firewall_marker_count", "2"),
         ("persistent_firewall_file_delta", "none"),
@@ -215,6 +225,7 @@ def main() -> int:
     print(f"base_audit_report_sha256={v2.sha_file(base_report)}")
     print(f"u0q_runtime_revision={builder_v2.RUNTIME_REVISION}")
     print("runtime_directory_order_verified=yes")
+    print("pre_switch_root_live_channel_gate_verified=yes")
     print("runtime_firewall_policy=runtime-nft-monitor")
     print("persistent_firewall_file_delta=none")
     print("audit_v2_status=passed")
