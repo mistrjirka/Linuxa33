@@ -11,14 +11,21 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 TESTS = ROOT / "tests"
 
-# These are executable runtime diagnostics whose replacement imports the exact
-# base implementation and applies a pinned compatibility correction. Running
-# both would execute the obsolete phone-facing path as a second independent
-# test and can produce a known false failure before the corrected replacement
-# runs. The replacement itself remains part of the legacy test suite.
+# These legacy entrypoints have exact corrected replacements that import or
+# recompute the pinned base implementation while testing the corrected
+# contract. Running both makes the known-obsolete assertion fail before or
+# alongside the replacement. A base test is skipped only while its named
+# replacement is present, so deleting a replacement automatically restores the
+# base test to the host gate.
 SUPERSEDED_LEGACY_TESTS: dict[str, str] = {
     "test-a33-installed-ssh-keygen-tmpfs.py": (
         "test-a33-installed-ssh-keygen-tmpfs-v2.py"
+    ),
+    "test-make-u0n-real-boot-sshd-trace.py": (
+        "test-make-u0n-real-boot-sshd-trace-v2.py"
+    ),
+    "test-make-u0o-persistent-sshd-trace.py": (
+        "test-make-u0o-persistent-sshd-trace-v2.py"
     ),
 }
 
