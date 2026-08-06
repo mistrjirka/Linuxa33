@@ -19,6 +19,8 @@ spec.loader.exec_module(module)
 assert module.EXPECTED_BASE_BLOB == "fa662b03cf3a4e4c9166ebc9fa0a177dc12dbdb4"
 assert module.RUNTIME_REVISION == "2"
 assert module.PRIVSEP_PATH == "/run/sshd"
+assert module.NETWORK_READY_PATH == "/run/a33x-u0q-network-ready"
+assert module.READY_TIMEOUT_SECONDS == 150
 assert module.FIREWALL_COMMENT == "a33x-u0q-emergency-2222"
 
 public_key = "ssh-ed25519 " + ("A" * 68) + " a33x-u0q-emergency"
@@ -26,6 +28,7 @@ network = module.network_script()
 for required in (
     "event=network-helper-started",
     "event=network-configured",
+    "event=network-ready-marker-written path=/run/a33x-u0q-network-ready",
     "nft list chain inet filter input",
     "nft insert rule inet filter input tcp dport 2222 accept",
     "a33x-u0q-emergency-2222",
@@ -44,12 +47,29 @@ for required in (
     "mkdir -p /sysroot/run/sshd",
     "chmod 0755 /sysroot/run/sshd",
     "chown 0:0 /sysroot/run/sshd",
+    "rm -f /sysroot/run/a33x-u0q-network-ready",
     "event=runtime-directory-ready path=/run/sshd backing=mounted-run revision=2",
+    "event=network-ready-marker-written path=/run/a33x-u0q-network-ready",
+    "event=pre-switch-root-wait",
+    "event=pre-switch-root-ready",
+    "emergency-channel-readiness-timeout",
+    "kill -0 \"$U0Q_SSHD_PID\"",
+    "/proc/net/tcp /proc/net/tcp6",
+    ":08AE$",
     "nft insert rule inet filter input tcp dport 2222 accept",
     "exec /bin/busybox chroot /sysroot /usr/sbin/sshd",
     "exec /bin/busybox chroot /sysroot /bin/sh -s",
 ):
     assert required in block, required
+
+order = (
+    block.index("event=runtime-directory-ready path=/run/sshd"),
+    block.index("event=network-helper-spawned"),
+    block.index("event=sshd-helper-spawned"),
+    block.index("event=pre-switch-root-ready"),
+)
+assert tuple(sorted(order)) == order
+
 for forbidden in (
     "/etc/nftables.d/",
     "/etc/nftables.nft",
@@ -81,10 +101,14 @@ for required in (
     "base.emergency_block = emergency_block",
     "validate_generated_payload(root)",
     "emergency_privsep_backing",
+    "emergency_pre_switch_root_gate",
+    "emergency_pre_switch_root_timeout_seconds",
+    "emergency_network_ready_path",
     "emergency_firewall_policy",
     "emergency_firewall_persistent_delta",
     "replace_single_field(manifest, \"patch_report_sha256\"",
     "init_text.count(FIREWALL_COMMENT) != 2",
+    "generated U0q v2 readiness gate is not before switch_root",
 ):
     assert required in source, required
 for forbidden in (
@@ -100,6 +124,7 @@ for forbidden in (
 print("a33_u0q_v2_builder_self_test=passed")
 print("exact_u0q_base_builder_blob_pin=passed")
 print("mounted_run_privsep_directory_contract=passed")
+print("pre_switch_root_network_and_listener_gate_contract=passed")
 print("runtime_only_nft_port_2222_monitor_contract=passed")
 print("normal_openrc_sshd_path_preserved=passed")
 print("generated_shell_syntax_validation=passed")
