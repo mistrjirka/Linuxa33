@@ -14,6 +14,8 @@ BASE_PATH = HERE / "make-u0q-emergency-ssh.py"
 EXPECTED_BASE_BLOB = "fa662b03cf3a4e4c9166ebc9fa0a177dc12dbdb4"
 RUNTIME_REVISION = "2"
 PRIVSEP_PATH = "/run/sshd"
+NETWORK_READY_PATH = "/run/a33x-u0q-network-ready"
+READY_TIMEOUT_SECONDS = 150
 FIREWALL_COMMENT = "a33x-u0q-emergency-2222"
 
 
@@ -70,7 +72,7 @@ u0q_net_log()
 u0q_net_log "event=network-helper-started pid=$$ revision={RUNTIME_REVISION}"
 u0q_wait=0
 u0q_iface=""
-while [ "$u0q_wait" -le 150 ]; do
+while [ "$u0q_wait" -le {READY_TIMEOUT_SECONDS} ]; do
     for u0q_name in usb0 rndis0 eth0; do
         if [ -e "/sys/class/net/$u0q_name" ]; then
             u0q_iface="$u0q_name"
@@ -99,6 +101,13 @@ while [ "$u0q_wait" -le 150 ]; do
             /bin/busybox grep -Fq '172.16.42.1/24'; then
             u0q_net_log "event=network-configured interface=$u0q_iface address=172.16.42.1/24 wait=$u0q_wait"
             /bin/busybox ip -o address show dev "$u0q_iface" >&8 2>&1 || true
+            printf '%s\n' "$u0q_iface" > {NETWORK_READY_PATH} || {{
+                u0q_net_log "error=network-ready-marker-write-failed path={NETWORK_READY_PATH}"
+                exit 1
+            }}
+            /bin/busybox chmod 0600 {NETWORK_READY_PATH} 2>/dev/null || true
+            sync 2>/dev/null || true
+            u0q_net_log "event=network-ready-marker-written path={NETWORK_READY_PATH} interface=$u0q_iface"
             break
         fi
         u0q_net_log "event=network-config-failed interface=$u0q_iface wait=$u0q_wait"
@@ -110,7 +119,7 @@ while [ "$u0q_wait" -le 150 ]; do
     u0q_wait=$((u0q_wait + 1))
 done
 if [ -z "$u0q_iface" ]; then
-    u0q_net_log "error=network-interface-timeout seconds=150"
+    u0q_net_log "error=network-interface-timeout seconds={READY_TIMEOUT_SECONDS}"
     exit 1
 fi
 
@@ -149,31 +158,83 @@ def emergency_block(public_key: str) -> str:
     finally:
         base.network_script = original_network
 
-    anchor = "sync 2>/dev/null || true\n\n(\n    exec 8>>\"$U0Q_TRACE\""
-    if block.count(anchor) != 1:
+    preparation_anchor = "sync 2>/dev/null || true\n\n(\n    exec 8>>\"$U0Q_TRACE\""
+    if block.count(preparation_anchor) != 1:
         refuse("U0q v2 runtime-preparation anchor is absent or duplicated")
     preparation = rf'''sync 2>/dev/null || true
 
 # sshd normally receives this volatile privilege-separation directory from its
 # OpenRC service setup. U0q starts before OpenRC, so require /run to already be
-# a distinct mount and create only the volatile directory beneath it.
+# a distinct mount and create only volatile state beneath it.
 if ! /bin/busybox awk '$2 == "/sysroot/run" {{ found=1 }} END {{ exit found ? 0 : 1 }}' /proc/mounts; then
     u0q_refuse run-is-not-a-mounted-runtime-filesystem
 fi
 /bin/busybox mkdir -p /sysroot{PRIVSEP_PATH} || u0q_refuse run-sshd-create-failed
 /bin/busybox chmod 0755 /sysroot{PRIVSEP_PATH} || u0q_refuse run-sshd-chmod-failed
 /bin/busybox chown 0:0 /sysroot{PRIVSEP_PATH} || u0q_refuse run-sshd-chown-failed
+/bin/busybox rm -f /sysroot{NETWORK_READY_PATH} || u0q_refuse stale-network-marker-remove-failed
 printf 'uptime=%s source=initramfs event=runtime-directory-ready path={PRIVSEP_PATH} backing=mounted-run revision={RUNTIME_REVISION}\n' \
     "$(/bin/busybox cut -d' ' -f1 /proc/uptime 2>/dev/null || true)" >> "$U0Q_TRACE"
 sync 2>/dev/null || true
 
 (
     exec 8>>"$U0Q_TRACE"'''
-    block = block.replace(anchor, preparation, 1)
+    block = block.replace(preparation_anchor, preparation, 1)
+
+    readiness_anchor = (
+        "sync 2>/dev/null || true\n"
+        f"printf '<6>{base.MARKER_PREFIX}: stage=helpers-spawned"
+    )
+    if block.count(readiness_anchor) != 1:
+        refuse("U0q v2 readiness-gate anchor is absent or duplicated")
+    readiness = rf'''sync 2>/dev/null || true
+
+# U0o proved that the NCM path can appear while initramfs remains alive, whereas
+# U0p switched roots before the interface became reachable. Do not switch roots
+# until the independent network helper has configured the address and sshd is
+# confirmed alive and listening on port 2222.
+U0Q_READY_WAIT=0
+U0Q_READY=no
+while [ "$U0Q_READY_WAIT" -le {READY_TIMEOUT_SECONDS} ]; do
+    /bin/busybox kill -0 "$U0Q_SSHD_PID" 2>/dev/null || \
+        u0q_refuse emergency-sshd-exited-before-ready
+    U0Q_NETWORK_READY=no
+    [ -s /sysroot{NETWORK_READY_PATH} ] && U0Q_NETWORK_READY=yes
+    U0Q_LISTENER_READY="$(
+        /bin/busybox awk '$2 ~ /:08AE$/ && $4 == "0A" {{ found=1 }} END {{ print found ? "yes" : "no" }}' \
+            /proc/net/tcp /proc/net/tcp6 2>/dev/null || true
+    )"
+    if [ "$U0Q_NETWORK_READY" = yes ] && [ "$U0Q_LISTENER_READY" = yes ]; then
+        U0Q_READY=yes
+        U0Q_READY_INTERFACE="$(/bin/busybox cat /sysroot{NETWORK_READY_PATH} 2>/dev/null || true)"
+        printf 'uptime=%s source=initramfs event=pre-switch-root-ready interface=%s listener=yes port=2222 wait=%s\n' \
+            "$(/bin/busybox cut -d' ' -f1 /proc/uptime 2>/dev/null || true)" \
+            "${{U0Q_READY_INTERFACE:-unknown}}" "$U0Q_READY_WAIT" >> "$U0Q_TRACE"
+        sync 2>/dev/null || true
+        break
+    fi
+    if [ $((U0Q_READY_WAIT % 10)) -eq 0 ]; then
+        printf 'uptime=%s source=initramfs event=pre-switch-root-wait network=%s listener=%s wait=%s\n' \
+            "$(/bin/busybox cut -d' ' -f1 /proc/uptime 2>/dev/null || true)" \
+            "$U0Q_NETWORK_READY" "${{U0Q_LISTENER_READY:-unknown}}" "$U0Q_READY_WAIT" >> "$U0Q_TRACE"
+        sync 2>/dev/null || true
+    fi
+    /bin/busybox sleep 1
+    U0Q_READY_WAIT=$((U0Q_READY_WAIT + 1))
+done
+[ "$U0Q_READY" = yes ] || u0q_refuse emergency-channel-readiness-timeout
+
+printf '<6>{base.MARKER_PREFIX}: stage=helpers-spawned'''
+    block = block.replace(readiness_anchor, readiness, 1)
+
     required = (
         'awk \'$2 == "/sysroot/run"',
         f"mkdir -p /sysroot{PRIVSEP_PATH}",
         f"event=runtime-directory-ready path={PRIVSEP_PATH}",
+        f"event=network-ready-marker-written path={NETWORK_READY_PATH}",
+        "event=pre-switch-root-wait",
+        "event=pre-switch-root-ready",
+        "emergency-channel-readiness-timeout",
         "event=runtime-firewall-rule-added",
         FIREWALL_COMMENT,
         "nft insert rule inet filter input tcp dport 2222 accept",
@@ -224,6 +285,9 @@ def validate_generated_payload(root: Path) -> None:
     unique_tokens = (
         "run-is-not-a-mounted-runtime-filesystem",
         f"event=runtime-directory-ready path={PRIVSEP_PATH}",
+        f"event=network-ready-marker-written path={NETWORK_READY_PATH}",
+        "event=pre-switch-root-ready",
+        "emergency-channel-readiness-timeout",
         "event=runtime-firewall-rule-added",
         "nft insert rule inet filter input tcp dport 2222 accept",
     )
@@ -232,6 +296,16 @@ def validate_generated_payload(root: Path) -> None:
             refuse(f"generated U0q v2 token missing or duplicated: {token}")
     if init_text.count(FIREWALL_COMMENT) != 2:
         refuse("generated U0q v2 firewall marker must occur in detection and rule")
+    order = (
+        init_text.index("candidate=U0q-emergency-ssh stage=trace-open"),
+        init_text.index(f"event=runtime-directory-ready path={PRIVSEP_PATH}"),
+        init_text.index("event=network-helper-spawned"),
+        init_text.index("event=sshd-helper-spawned"),
+        init_text.index("event=pre-switch-root-ready"),
+        init_text.index('exec switch_root /sysroot "$init"'),
+    )
+    if tuple(sorted(order)) != order:
+        refuse("generated U0q v2 readiness gate is not before switch_root")
 
 
 def main() -> int:
@@ -259,6 +333,9 @@ def main() -> int:
         ("emergency_runtime_mount_required", "/run"),
         ("emergency_privsep_path", PRIVSEP_PATH),
         ("emergency_privsep_backing", "preexisting-mounted-run"),
+        ("emergency_pre_switch_root_gate", "network-address-and-port-2222-listener"),
+        ("emergency_pre_switch_root_timeout_seconds", str(READY_TIMEOUT_SECONDS)),
+        ("emergency_network_ready_path", NETWORK_READY_PATH),
         ("emergency_firewall_policy", "runtime-nft-monitor"),
         ("emergency_firewall_rule_comment", FIREWALL_COMMENT),
         ("emergency_firewall_persistent_delta", "none"),
@@ -269,6 +346,9 @@ def main() -> int:
     print(f"u0q_runtime_revision={RUNTIME_REVISION}")
     print(f"emergency_privsep_path={PRIVSEP_PATH}")
     print("emergency_privsep_backing=preexisting-mounted-run")
+    print("emergency_pre_switch_root_gate=network-address-and-port-2222-listener")
+    print(f"emergency_pre_switch_root_timeout_seconds={READY_TIMEOUT_SECONDS}")
+    print(f"emergency_network_ready_path={NETWORK_READY_PATH}")
     print("emergency_firewall_policy=runtime-nft-monitor")
     print(f"emergency_firewall_rule_comment={FIREWALL_COMMENT}")
     print("emergency_firewall_persistent_delta=none")
