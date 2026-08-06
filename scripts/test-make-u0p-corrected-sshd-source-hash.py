@@ -52,6 +52,20 @@ assert module.declared_instrumented_sha(patched) == corrected_sha
 assert patched.count("candidate=U0p-corrected-sshd-source-hash stage=trace-open") == 1
 assert "candidate=U0o-persistent-sshd-trace stage=trace-open" not in patched
 
+# Safety tokens are intentionally present in the Python builder's fail-closed
+# denylist. Validate that they are absent from the generated shell payload,
+# rather than incorrectly rejecting the source code for mentioning them.
+for forbidden in (
+    'mount -o remount,rw /sysroot',
+    'rm -rf "/sysroot"',
+    "rm -rf /sysroot",
+    "> /sysroot/etc/",
+    "dd if=",
+    "mkfs",
+    "wipefs",
+):
+    assert forbidden not in patched, forbidden
+
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     init = root / "init_2nd.sh"
@@ -77,8 +91,6 @@ for forbidden in (
     "adb reboot",
     "fastboot",
     "odin4 -a",
-    "mount -o remount,rw /sysroot",
-    "rm -rf /sysroot",
 ):
     assert forbidden not in source, forbidden
 
@@ -88,5 +100,6 @@ print("stale_u0n_hash_mismatch_reproduction=passed")
 print("embedded_heredoc_bytes_preserved=passed")
 print("declared_runtime_hash_corrected_to_embedded_bytes=passed")
 print("trace_candidate_label_updated=passed")
+print("generated_payload_denylist_contract=passed")
 print("host_only_and_phone_write_absence=passed")
 print("shell_syntax_validation=passed")
