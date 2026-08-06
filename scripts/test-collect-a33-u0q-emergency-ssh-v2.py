@@ -30,12 +30,16 @@ for required in (
     "emit_trace inherited",
     "/var/log/a33x-u0q-emergency-ssh.log",
     "/var/log/a33x-u0o-real-boot-sshd.log",
-    "emergency_base64_begin",
-    "inherited_base64_begin",
+    'echo "${name}_base64_begin"',
+    'echo "${name}_base64_end"',
     "trace_readonly_unmount=passed",
     "userdata_persistent_writes=no",
 ):
     assert required in script, required
+assert script.count('echo "${name}_base64_begin"') == 1
+assert script.count('echo "${name}_base64_end"') == 1
+assert script.count("emit_trace emergency") == 1
+assert script.count("emit_trace inherited") == 1
 for forbidden in (
     "mount -o remount,rw",
     "umount -l",
@@ -51,6 +55,25 @@ with tempfile.TemporaryDirectory() as temporary:
     path = Path(temporary) / "u0q-v2-trace-collector.sh"
     path.write_text(script, encoding="utf-8")
     subprocess.run(["sh", "-n", str(path)], check=True)
+
+# The shell function emits these expanded framing markers at runtime when called
+# with the two exact names above. The decoder consumes the same name-specific
+# section labels, so source-level parameterization and runtime framing agree.
+for runtime_name in ("emergency", "inherited"):
+    fixture = (
+        f"{runtime_name}_state=present-regular\n"
+        f"{runtime_name}_bytes=0\n"
+        f"{runtime_name}_sha256=e3b0c44298fc1c149afbf4c8996fb924"
+        "27ae41e4649b934ca495991b7852b855\n"
+        f"{runtime_name}_base64_begin\n"
+        f"{runtime_name}_base64_end\n"
+    )
+    parsed = module.values(fixture)
+    assert parsed[f"{runtime_name}_state"] == "present-regular"
+    assert module.section(fixture, f"{runtime_name}_base64") == []
+    payload, decoded = module.decode_trace(fixture, parsed, runtime_name)
+    assert payload == b""
+    assert decoded == ""
 
 emergency_fixture = """
 source=initramfs candidate=U0q-emergency-ssh stage=trace-open
@@ -130,6 +153,7 @@ for forbidden in (
 
 print("a33_u0q_v2_collector_self_test=passed")
 print("exact_flash_observer_and_parent_collector_blob_pins=passed")
+print("parameterized_source_to_runtime_trace_framing_contract=passed")
 print("transition_proven_observation_requirement=passed")
 print("exact_twrp_restore_verification_contract=passed")
 print("dual_trace_read_only_noload_transport_contract=passed")
