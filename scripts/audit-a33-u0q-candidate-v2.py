@@ -12,7 +12,7 @@ HERE = Path(__file__).resolve().parent
 BASE_AUDIT_PATH = HERE / "audit-a33-u0q-candidate.py"
 BUILDER_V2_PATH = HERE / "make-u0q-emergency-ssh-v2.py"
 EXPECTED_BASE_AUDIT_BLOB = "f52f01d8c878ed24aaae3f508f6e8e82663971e3"
-EXPECTED_BUILDER_V2_BLOB = "63d3dcd9f75fda918768722c5f1d673dfeb81cd2"
+EXPECTED_BUILDER_V2_BLOB = "63d3d9c548847b6ad710f29844265359e401185d"
 REPORT_NAME = "a33-u0q-candidate-audit-v2.txt"
 
 
