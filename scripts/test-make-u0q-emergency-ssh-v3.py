@@ -25,12 +25,16 @@ block = module.emergency_block(public_key)
 for required in (
     "event=runtime-mounts-ready",
     "policy=verify-or-create-proc-sys-dev-devpts-run",
+    "u0q_mount_present",
+    "u0q_verify_fstype",
     "mount -t proc proc /sysroot/proc",
     "mount -t sysfs sysfs /sysroot/sys",
     "mount -o bind /dev /sysroot/dev",
     "mount -t devpts",
     "mount -t tmpfs",
-    "verified-or-created",
+    "U0Q_RUN_BACKING=preexisting",
+    "U0Q_RUN_BACKING=created-tmpfs",
+    "u0q_verify_fstype /sysroot/run tmpfs:ramfs",
     "event=runtime-directory-ready",
     "event=network-helper-spawned",
     "event=sshd-helper-spawned",
@@ -69,6 +73,16 @@ for required in (
     "v2.validate_generated_payload = validate_generated_payload",
     "replace_field(path, \"u0q_runtime_revision\"",
     "verified-or-created-tmpfs-run",
+    "emergency_proc_backing",
+    "verified-or-created-proc",
+    "emergency_sys_backing",
+    "verified-or-created-sysfs",
+    "emergency_dev_backing",
+    "verified-or-created-bind-dev",
+    "emergency_devpts_backing",
+    "verified-or-created-devpts",
+    "emergency_run_backing",
+    "verified-or-created-tmpfs",
     "emergency_runtime_mount_policy",
     "emergency_persistent_mount_config_delta",
     "replace_field(manifest, \"patch_report_sha256\"",
@@ -87,6 +101,8 @@ for forbidden in (
 print("a33_u0q_v3_builder_self_test=passed")
 print("exact_v2_builder_blob_pin=passed")
 print("proc_sys_dev_devpts_run_verify_or_create_contract=passed")
+print("preexisting_and_created_tmpfs_run_branches=passed")
+print("evidence_metadata_verified_or_created_contract=passed")
 print("post_cleanup_pre_switch_root_mount_order_contract=passed")
 print("chrooted_sshd_and_network_helper_contract_preserved=passed")
 print("persistent_mount_configuration_delta_absence=passed")
