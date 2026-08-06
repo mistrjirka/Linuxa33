@@ -10,7 +10,7 @@ HERE = Path(__file__).resolve().parent
 BASE_OBSERVER_PATH = HERE / "observe-a33-u0r-early-metadata-trace.py"
 FLASH_V3_PATH = HERE / "flash-a33-u0r-early-metadata-trace-v3.py"
 EXPECTED_BASE_OBSERVER_BLOB = "8fbe86e7705f90d492fc4b13e05227d00c9f0b61"
-EXPECTED_FLASH_V3_BLOB = "f63c783c1d85b387d07259c1f53d69af75bd359f"
+EXPECTED_FLASH_V3_BLOB = "7d1c6d9940ea4677e03e9bb9bebac506ab0849b8"
 
 
 def load(name: str, path: Path):
